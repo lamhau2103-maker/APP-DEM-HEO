@@ -61,10 +61,11 @@ function distToSegment(p: Point2D, v: Point2D, w: Point2D) {
 }
 
 export default function App() {
-  // --- Authentication State (Default: must log in) ---
+  // --- Authentication State (sessionStorage: Tự động xóa khi đóng tab/trình duyệt) ---
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
-      const saved = localStorage.getItem('app_current_auth_user');
+      localStorage.removeItem('app_current_auth_user');
+      const saved = sessionStorage.getItem('app_current_auth_user');
       return saved ? JSON.parse(saved) : null;
     } catch {
       return null;
@@ -98,13 +99,13 @@ export default function App() {
   // Active bottom navigation tab
   const [activeTab, setActiveTab] = useState<NavTab>('camera');
 
-  // Persist authentication data
+  // Persist authentication data in sessionStorage (tự động xóa khi tắt tab hoặc đóng ứng dụng)
   useEffect(() => {
     try {
       if (currentUser) {
-        localStorage.setItem('app_current_auth_user', JSON.stringify(currentUser));
+        sessionStorage.setItem('app_current_auth_user', JSON.stringify(currentUser));
       } else {
-        localStorage.removeItem('app_current_auth_user');
+        sessionStorage.removeItem('app_current_auth_user');
       }
     } catch {
       // ignore
@@ -136,6 +137,7 @@ export default function App() {
   const handleLogout = () => {
     setCurrentUser(null);
     try {
+      sessionStorage.removeItem('app_current_auth_user');
       localStorage.removeItem('app_current_auth_user');
     } catch {
       // ignore
@@ -180,6 +182,11 @@ export default function App() {
     // If the revoked user is currently logged in, log them out
     if (currentUser && currentUser.email.toLowerCase() === emailLower && currentUser.role !== 'admin') {
       setCurrentUser(null);
+      try {
+        sessionStorage.removeItem('app_current_auth_user');
+      } catch {
+        // ignore
+      }
     }
   };
 

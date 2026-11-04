@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { OnnxPigDetector } from '../utils/onnxModel';
-import { Cpu, Upload, RefreshCw, CheckCircle2, AlertCircle, FileCode, Sliders, ShieldAlert, Lock, Volume2, VolumeX, Move, ShieldCheck, ArrowUpDown } from 'lucide-react';
+import { Cpu, RefreshCw, CheckCircle2, AlertCircle, FileCode, Sliders, ShieldAlert, Lock, Volume2, VolumeX, Move, ShieldCheck, ArrowUpDown } from 'lucide-react';
 import { UserRole } from '../types';
 
 interface AiParamsTabProps {
@@ -32,36 +32,11 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
   onToggleSound,
   onResetLineZone,
 }) => {
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const isAdmin = userRole === 'admin';
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!isAdmin) return;
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setLoading(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    try {
-      const buffer = await file.arrayBuffer();
-      const success = await onnxDetector.loadModelFromBuffer(buffer, file.name);
-      if (success) {
-        onModelLoaded(file.name);
-        setSuccessMsg(`Đã nạp thành công mô hình Roboflow: ${file.name}`);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Tệp ONNX không hợp lệ';
-      setErrorMsg(`Lỗi nạp file ONNX: ${msg}. Đảm bảo tệp xuất từ Roboflow ở định dạng ONNX.`);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleLoadDefault = async () => {
     if (!isAdmin) return;
@@ -75,7 +50,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
         onModelLoaded('weights1.onnx (GitHub Release)');
         setSuccessMsg('Đã kết nối và nạp thành công weights1.onnx từ GitHub Release v1.0.0!');
       } else {
-        setErrorMsg('Chưa thể kết nối tới GitHub Release. Vui lòng kiểm tra kết nối mạng hoặc bấm nút "Tải Lên Tệp weights1.onnx" để chọn file từ máy.');
+        setErrorMsg('Chưa thể kết nối tới GitHub Release. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Lỗi kết nối';

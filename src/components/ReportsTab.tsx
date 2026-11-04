@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BatchRecord } from '../types';
-import { FileSpreadsheet, Printer, Copy, Check, MessageSquare, Trash2, ArrowUpDown, Calendar, Clock, ShieldCheck, ExternalLink } from 'lucide-react';
+import { FileSpreadsheet, FileText, Printer, Copy, Check, MessageSquare, Trash2, ArrowUpDown, Calendar, Clock, ShieldCheck, ExternalLink } from 'lucide-react';
 
 interface ReportsTabProps {
   records: BatchRecord[];
@@ -293,10 +293,10 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({
                         <button
                           onClick={() => onSelectForPrint(rec)}
                           className="px-2.5 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg font-bold text-[11px] inline-flex items-center gap-1 transition-colors cursor-pointer"
-                          title="Xem lại và in phiếu"
+                          title="Xem chi tiết phiếu ghi nhận kiểm đếm"
                         >
-                          <Printer className="w-3.5 h-3.5" />
-                          In Phiếu
+                          <FileText className="w-3.5 h-3.5 text-sky-600" />
+                          Xem phiếu
                         </button>
                         <button
                           onClick={(e) => {
