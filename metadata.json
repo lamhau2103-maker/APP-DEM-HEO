@@ -1,0 +1,10 @@
+{
+  "name": "Hệ Thống Đếm Heo Tự Động AI - Kho Heo Trung Tâm",
+  "description": "Ứng dụng giám sát và đếm heo tự động qua vạch camera bằng AI, quản lý thông tin xuất nhập trại, in phiếu giao nhận và thống kê theo thời gian thực.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
