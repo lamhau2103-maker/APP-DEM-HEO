@@ -73,46 +73,65 @@ export class OnnxPigDetector {
       this.status = 'loading';
       this.statusMessage = 'Đang kết nối mô hình AI...';
 
-      // Cấu hình CDN WASM v1.18.0 ngay trước khi tạo session
+      // Cấu hình CDN WASM v1.18.0 chuẩn, tắt multi-threads để tránh lỗi SharedArrayBuffer
       ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
       ort.env.wasm.numThreads = 1;
+      ort.env.wasm.simd = true;
       ort.env.wasm.proxy = false;
 
-      // Ưu tiên tăng tốc phần cứng đồ họa bằng WebGL trước, sau đó fallback sang WASM
-      let created = false;
+      // 1. Tải file dưới dạng ArrayBuffer từ GitHub Release
+      let buffer: ArrayBuffer | null = null;
       try {
-        this.session = await ort.InferenceSession.create(url, {
-          executionProviders: ['webgl', 'wasm'],
-        });
-        created = true;
-      } catch {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          buffer = await resp.arrayBuffer();
+        }
+      } catch (err) {
+        console.warn('Direct GitHub fetch CORS blocked, using local/proxy fallback:', err);
+      }
+
+      // Fallback 1: Thử nạp từ file cục bộ /weights1.onnx
+      if (!buffer) {
         try {
-          this.session = await ort.InferenceSession.create(url, {
-            executionProviders: ['wasm'],
-          });
-          created = true;
-        } catch {
-          // Fallback tải buffer qua fetch (hỗ trợ redirect GitHub objects.githubusercontent.com)
-          const resp = await fetch(url);
-          if (!resp.ok) {
-            throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+          const localResp = await fetch('/weights1.onnx');
+          if (localResp.ok) {
+            buffer = await localResp.arrayBuffer();
           }
-          const buffer = await resp.arrayBuffer();
-          const modelBytes = new Uint8Array(buffer);
-          try {
-            this.session = await ort.InferenceSession.create(modelBytes, {
-              executionProviders: ['webgl', 'wasm'],
-            });
-          } catch {
-            this.session = await ort.InferenceSession.create(modelBytes, {
-              executionProviders: ['wasm'],
-            });
-          }
-          created = true;
+        } catch (e) {
+          // ignore
         }
       }
 
-      if (created && this.session) {
+      // Fallback 2: Thử nạp qua proxy server /api/model-proxy
+      if (!buffer) {
+        try {
+          const proxyResp = await fetch('/api/model-proxy');
+          if (proxyResp.ok) {
+            buffer = await proxyResp.arrayBuffer();
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      if (!buffer) {
+        throw new Error('Không thể tải tệp weights1.onnx từ GitHub Release');
+      }
+
+      // 2. Tạo session từ mảng Uint8Array(buffer) theo đúng yêu cầu
+      const modelBytes = new Uint8Array(buffer);
+      try {
+        this.session = await ort.InferenceSession.create(modelBytes, {
+          executionProviders: ['webgl', 'wasm'],
+        });
+      } catch {
+        // Fallback tăng cường sang WASM nếu trình duyệt chưa bật WebGL
+        this.session = await ort.InferenceSession.create(modelBytes, {
+          executionProviders: ['wasm'],
+        });
+      }
+
+      if (this.session) {
         this.isLoaded = true;
         this.status = 'loaded';
         this.modelName = 'weights1.onnx (GitHub Release)';
@@ -138,7 +157,7 @@ export class OnnxPigDetector {
   }
 
   /**
-   * Nạp thủ công tệp weights1.onnx do người dùng chọn từ máy (Yêu cầu 3)
+   * Nạp thủ công tệp weights1.onnx do người dùng chọn từ máy
    */
   public async loadModelFromBuffer(buffer: ArrayBuffer, fileName = 'weights1.onnx'): Promise<boolean> {
     const ort = this.getOrt();
@@ -153,13 +172,14 @@ export class OnnxPigDetector {
 
       ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
       ort.env.wasm.numThreads = 1;
+      ort.env.wasm.simd = true;
       ort.env.wasm.proxy = false;
 
       const modelBytes = new Uint8Array(buffer);
 
       try {
         this.session = await ort.InferenceSession.create(modelBytes, {
-          executionProviders: ['wasm', 'webgl'],
+          executionProviders: ['webgl', 'wasm'],
         });
       } catch {
         this.session = await ort.InferenceSession.create(modelBytes, {
