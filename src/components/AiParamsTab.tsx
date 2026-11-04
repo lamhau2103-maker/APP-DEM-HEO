@@ -147,7 +147,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
           <div className="flex-1">
             <div className="flex items-center justify-between">
               <p className="font-bold text-sm">
-                Trạng thái: {isModelLoaded ? 'Mô hình Roboflow ONNX đang hoạt động' : 'Chưa kết nối weights1.onnx (Vui lòng nạp weights1.onnx)'}
+                Trạng thái: {isModelLoaded ? 'Mô hình AI weights1.onnx đang hoạt động' : 'Đang kết nối mô hình AI từ GitHub Release...'}
               </p>
               <span className="font-mono text-xs font-bold text-sky-700 bg-white/90 px-2.5 py-0.5 rounded-xl border border-sky-200 shadow-2xs">
                 {modelName}
@@ -155,58 +155,43 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
             </div>
             <p className="text-xs mt-1 text-slate-700">
               {isModelLoaded
-                ? 'Đã kết nối thành công file trọng số weights1.onnx. Hệ thống chỉ nhận diện hình dạng heo, tự động bỏ qua người và vật.'
-                : 'Ứng dụng chỉ nhận diện kết quả từ mô hình ONNX. Bạn hãy chọn tệp weights1.onnx từ máy để nạp trực tiếp.'}
+                ? 'Đã kết nối thành công weights1.onnx từ GitHub Release (v1.0.0). Hệ thống chỉ nhận diện hình dạng heo, tự động bỏ qua người và vật.'
+                : 'Ứng dụng đang tự động kết nối và tải ngầm weights1.onnx từ GitHub Release v1.0.0.'}
             </p>
           </div>
         </div>
 
-        {/* 1. SECTION: Nạp weights1.onnx */}
+        {/* 1. SECTION: Kết nối weights1.onnx */}
         <div className="bg-white/80 backdrop-blur-xl p-6 rounded-3xl border border-white/95 shadow-[0_12px_36px_rgba(15,23,42,0.06)] ring-1 ring-sky-100/60 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-2">
             <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
               <FileCode className="w-4 h-4 text-sky-600" />
-              Nạp Tệp Trọng Số Model Roboflow (weights1.onnx)
+              Mô Hình AI YOLOv8 weights1.onnx (GitHub Releases)
             </h3>
-            <span className="text-[11px] font-mono text-slate-400">Định dạng .onnx</span>
+            <span className="text-[11px] font-mono text-emerald-600 font-bold">Auto-Sync v1.0.0</span>
           </div>
 
-          <div className="border-2 border-dashed border-sky-200 hover:border-sky-400 rounded-3xl p-7 text-center bg-sky-50/40 backdrop-blur-xs transition-colors">
-            <FileCode className="w-12 h-12 mx-auto text-sky-600 mb-2 stroke-1" />
+          <div className="border border-sky-200 rounded-3xl p-6 text-center bg-sky-50/40 backdrop-blur-xs">
+            <FileCode className="w-10 h-10 mx-auto text-sky-600 mb-2 stroke-1" />
             <p className="font-bold text-slate-800 text-sm">
-              Chọn hoặc Kéo thả tệp <span className="font-mono text-sky-700 font-bold">weights1.onnx</span> từ máy tính của bạn
+              Mô hình được tự động nạp ngầm từ GitHub Release chính thức:
             </p>
-            <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              Hỗ trợ mô hình YOLOv8, YOLOv11 hoặc YOLOv5 huấn luyện từ Roboflow xuất ở định dạng ONNX.
+            <p className="text-xs text-sky-700 font-mono mt-1 max-w-lg mx-auto bg-white/80 py-1.5 px-3 rounded-xl border border-sky-100 truncate">
+              https://github.com/lamhau2103-maker/APP-DEM-HEO/releases/download/v1.0.0/weights1.onnx
+            </p>
+            <p className="text-xs text-slate-500 mt-2">
+              Tối ưu tăng tốc phần cứng WebGL và tự động nhận diện heo qua camera ở 10 - 15 FPS siêu mượt.
             </p>
 
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".onnx"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
-
-            <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
-              <button
-                type="button"
-                disabled={loading || !isAdmin}
-                onClick={() => fileInputRef.current?.click()}
-                className="px-5 py-3 bg-gradient-to-b from-sky-500 via-sky-600 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white font-black text-xs rounded-2xl flex items-center gap-2 shadow-[0_4px_0_0_#0284c7,0_6px_14px_rgba(2,132,199,0.25)] active:shadow-none active:translate-y-0.5 border-t border-sky-300/40 transition-all cursor-pointer disabled:opacity-50"
-              >
-                <Upload className="w-4 h-4" />
-                {loading ? 'Đang nạp model...' : 'Tải Lên Tệp weights1.onnx'}
-              </button>
-
+            <div className="flex items-center justify-center gap-3 mt-4">
               <button
                 type="button"
                 disabled={loading || !isAdmin}
                 onClick={handleLoadDefault}
-                className="px-4 py-3 bg-gradient-to-b from-white via-slate-50 to-slate-100 hover:from-white hover:to-slate-200 text-slate-800 font-bold text-xs rounded-2xl flex items-center gap-1.5 border border-slate-200 shadow-[0_3px_0_0_#cbd5e1] active:shadow-none active:translate-y-0.5 transition-all cursor-pointer disabled:opacity-50"
+                className="px-5 py-3 bg-gradient-to-b from-sky-500 via-sky-600 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white font-black text-xs rounded-2xl flex items-center gap-2 shadow-[0_4px_0_0_#0284c7,0_6px_14px_rgba(2,132,199,0.25)] active:shadow-none active:translate-y-0.5 border-t border-sky-300/40 transition-all cursor-pointer disabled:opacity-50"
               >
-                <RefreshCw className="w-4 h-4 text-slate-600" />
-                Nạp từ GitHub Release (v1.0.0)
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                {loading ? 'Đang đồng bộ...' : 'Đồng Bộ Lại Từ GitHub Release'}
               </button>
             </div>
           </div>

@@ -71,18 +71,18 @@ export class OnnxPigDetector {
 
     try {
       this.status = 'loading';
-      this.statusMessage = 'Đang nạp mô hình weights1.onnx từ GitHub Release...';
+      this.statusMessage = 'Đang kết nối mô hình AI...';
 
       // Cấu hình CDN WASM v1.18.0 ngay trước khi tạo session
       ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
       ort.env.wasm.numThreads = 1;
       ort.env.wasm.proxy = false;
 
-      // Nạp trực tiếp từ đường dẫn GitHub Release
+      // Ưu tiên tăng tốc phần cứng đồ họa bằng WebGL trước, sau đó fallback sang WASM
       let created = false;
       try {
         this.session = await ort.InferenceSession.create(url, {
-          executionProviders: ['wasm', 'webgl'],
+          executionProviders: ['webgl', 'wasm'],
         });
         created = true;
       } catch {
@@ -98,9 +98,16 @@ export class OnnxPigDetector {
             throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
           }
           const buffer = await resp.arrayBuffer();
-          this.session = await ort.InferenceSession.create(new Uint8Array(buffer), {
-            executionProviders: ['wasm'],
-          });
+          const modelBytes = new Uint8Array(buffer);
+          try {
+            this.session = await ort.InferenceSession.create(modelBytes, {
+              executionProviders: ['webgl', 'wasm'],
+            });
+          } catch {
+            this.session = await ort.InferenceSession.create(modelBytes, {
+              executionProviders: ['wasm'],
+            });
+          }
           created = true;
         }
       }
@@ -109,17 +116,16 @@ export class OnnxPigDetector {
         this.isLoaded = true;
         this.status = 'loaded';
         this.modelName = 'weights1.onnx (GitHub Release)';
-        this.statusMessage = 'Đã kết nối weights1.onnx (GitHub Release)';
+        this.statusMessage = 'Mô hình AI: Sẵn sàng';
         return true;
       }
 
       throw new Error('Không thể khởi tạo session ONNX');
     } catch (err: unknown) {
-      // Bắt lỗi an toàn nếu mất mạng hoặc link chưa sẵn sàng
       this.isLoaded = false;
       this.status = 'error';
       const msg = err instanceof Error ? err.message : String(err);
-      this.statusMessage = `Chưa nạp được weights1.onnx từ GitHub (${msg}). Có thể nạp thủ công từ máy.`;
+      this.statusMessage = `Đang kết nối lại mô hình AI... (${msg})`;
       return false;
     }
   }

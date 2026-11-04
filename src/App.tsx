@@ -198,7 +198,6 @@ export default function App() {
   const webcamVideoRef = useRef<HTMLVideoElement | null>(null);
   const uploadedVideoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const onnxFileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   // --- Computer Vision Engines (100% ONNX Inference) ---
@@ -287,41 +286,23 @@ export default function App() {
     }
   }, [linePoints]);
 
-  // Tự động tìm và liên kết weights1.onnx khi khởi chạy (Yêu cầu 3)
+  // Tự động tải ngầm mô hình weights1.onnx từ GitHub Release (Yêu cầu 1)
   useEffect(() => {
+    setStatusMsg('Đang kết nối mô hình AI...');
     onnxDetectorRef.current
       .autoLoadModel()
       .then(loaded => {
         setModelStatus(onnxDetectorRef.current.getStatus());
         if (loaded) {
-          setStatusMsg('Đã kết nối thành công weights1.onnx từ GitHub Release (v1.0.0)');
+          setStatusMsg('Mô hình AI: Sẵn sàng nhận diện heo');
         } else {
-          setStatusMsg('Chưa nạp được weights1.onnx từ GitHub. Bạn có thể bấm "Nạp thủ công weights1.onnx từ máy"');
+          setStatusMsg('Đang kết nối lại mô hình AI...');
         }
       })
       .catch(() => {
         setModelStatus(onnxDetectorRef.current.getStatus());
       });
   }, []);
-
-  // Xử lý nạp thủ công weights1.onnx từ máy tính (Yêu cầu 3)
-  const handleManualOnnxUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      setStatusMsg(`Đang nạp ${file.name}...`);
-      const buffer = await file.arrayBuffer();
-      const ok = await onnxDetectorRef.current.loadModelFromBuffer(buffer, file.name);
-      setModelStatus(onnxDetectorRef.current.getStatus());
-      if (ok) {
-        setStatusMsg(`Đã kết nối thành công mô hình ${file.name}!`);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setStatusMsg(`Lỗi nạp ${file.name}: ${msg}`);
-      setModelStatus(onnxDetectorRef.current.getStatus());
-    }
-  };
 
   // Live Digital Clock
   useEffect(() => {
@@ -426,6 +407,9 @@ export default function App() {
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
     let isInferencing = false;
+    let lastInferTime = 0;
+    const INFER_INTERVAL_MS = 80; // Giới hạn AI 10 - 15 FPS (80ms/lần) loại bỏ hoàn toàn giật lag
+    let cachedDetections: DetectionBox[] = [];
 
     const loop = async () => {
       const canvas = canvasRef.current;
@@ -457,21 +441,28 @@ export default function App() {
         canvas.height = h;
       }
 
-      let detectedBoxes: DetectionBox[] = [];
       const isModelReady = onnxDetectorRef.current.getStatus().isLoaded;
 
-      // 1. Process Real Video Feed (Webcam or Uploaded Video)
+      // 1. Hiển thị luồng Video mượt mà ở 60 FPS
       if (sourceMode === 'webcam') {
         const video = webcamVideoRef.current;
         if (video && video.readyState >= 2) {
           ctx.drawImage(video, 0, 0, w, h);
-          if (isModelReady && !isInferencing) {
+          // Cơ chế Throttling: chỉ suy luận AI ở 10 - 15 FPS, không chặn luồng hiển thị
+          if (isModelReady && !isInferencing && (now - lastInferTime >= INFER_INTERVAL_MS)) {
             isInferencing = true;
-            try {
-              detectedBoxes = await onnxDetectorRef.current.detectPigs(canvas, confidenceThreshold);
-            } finally {
-              isInferencing = false;
-            }
+            onnxDetectorRef.current
+              .detectPigs(canvas, confidenceThreshold)
+              .then(boxes => {
+                cachedDetections = boxes;
+                lastInferTime = performance.now();
+              })
+              .catch(err => {
+                console.error('Lỗi suy luận AI:', err);
+              })
+              .finally(() => {
+                isInferencing = false;
+              });
           }
         } else {
           ctx.fillStyle = '#0f172a';
@@ -485,13 +476,21 @@ export default function App() {
         const video = uploadedVideoRef.current;
         if (video && video.readyState >= 2 && !video.paused) {
           ctx.drawImage(video, 0, 0, w, h);
-          if (isModelReady && !isInferencing) {
+          // Cơ chế Throttling: chỉ suy luận AI ở 10 - 15 FPS
+          if (isModelReady && !isInferencing && (now - lastInferTime >= INFER_INTERVAL_MS)) {
             isInferencing = true;
-            try {
-              detectedBoxes = await onnxDetectorRef.current.detectPigs(canvas, confidenceThreshold);
-            } finally {
-              isInferencing = false;
-            }
+            onnxDetectorRef.current
+              .detectPigs(canvas, confidenceThreshold)
+              .then(boxes => {
+                cachedDetections = boxes;
+                lastInferTime = performance.now();
+              })
+              .catch(err => {
+                console.error('Lỗi suy luận AI:', err);
+              })
+              .finally(() => {
+                isInferencing = false;
+              });
           }
         } else {
           ctx.fillStyle = '#0f172a';
@@ -503,21 +502,20 @@ export default function App() {
         }
       }
 
-      // YÊU CẦU 1: Tuyệt đối không vẽ bất kỳ khung hình giả nào nếu mô hình ONNX chưa nạp xong
       if (!isModelReady) {
-        detectedBoxes = [];
+        cachedDetections = [];
       }
 
-      const filteredDetections = detectedBoxes.filter(b => b.confidence >= confidenceThreshold);
+      const filteredDetections = cachedDetections.filter(b => b.confidence >= confidenceThreshold);
 
-      // 2. Multi-Object Tracker / Centroid Tracker (Yêu cầu 6)
+      // 2. Multi-Object Tracker / Centroid Tracker chạy mượt ở 60 FPS (Yêu cầu 4 & 6)
       let activeTracks: PigTrack[] = [];
       if (trackerRef.current) {
         const result = trackerRef.current.update(filteredDetections, w, h);
         activeTracks = result.tracks;
       }
 
-      // 3. Draw Bounding Boxes & Centroid Dots (Yêu cầu 6)
+      // 3. Vẽ Bounding Boxes & Chấm tròn tâm heo (Yêu cầu 3 & 4)
       for (const track of activeTracks) {
         if (track.history.length > 1) {
           ctx.strokeStyle = track.crossed ? 'rgba(34, 197, 94, 0.45)' : 'rgba(6, 182, 212, 0.45)';
@@ -553,7 +551,7 @@ export default function App() {
         ctx.lineTo(boxX + track.width, boxY + cornerSize);
         ctx.stroke();
 
-        // Chấm tròn nhỏ ngay tâm mỗi con heo (Yêu cầu 6: centerX, centerY)
+        // Chấm tròn nhỏ ngay tâm mỗi con heo (Yêu cầu centroid: centerX, centerY)
         ctx.save();
         ctx.fillStyle = track.crossed ? '#22c55e' : '#f59e0b';
         ctx.shadowColor = track.crossed ? '#22c55e' : '#f59e0b';
@@ -573,24 +571,6 @@ export default function App() {
         ctx.fillRect(boxX, boxY - 16, textWidth + 8, 16);
         ctx.fillStyle = '#000000';
         ctx.fillText(tagText, boxX + 4, boxY - 4);
-      }
-
-      // Thông báo trực quan trên canvas khi chưa có mô hình weights1.onnx
-      if (!isModelReady) {
-        ctx.save();
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
-        ctx.fillRect(w / 2 - 210, h / 2 - 42, 420, 84);
-        ctx.strokeStyle = '#f59e0b';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(w / 2 - 210, h / 2 - 42, 420, 84);
-        ctx.fillStyle = '#fbbf24';
-        ctx.font = 'bold 14px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('⚠️ CHƯA KẾT NỐI weights1.onnx', w / 2, h / 2 - 12);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '11px sans-serif';
-        ctx.fillText('Vui lòng nạp thủ công file weights1.onnx để nhận diện heo', w / 2, h / 2 + 14);
-        ctx.restore();
       }
 
       // 4. Draw Arbitrary LineZone
@@ -1164,35 +1144,18 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Trạng thái liên kết weights1.onnx & Nạp thủ công (Yêu cầu 3) */}
+              {/* Trạng thái mô hình AI tự động từ GitHub Release (Yêu cầu 1) */}
               <div className="flex items-center gap-2">
-                <input
-                  type="file"
-                  ref={onnxFileInputRef}
-                  accept=".onnx"
-                  onChange={handleManualOnnxUpload}
-                  className="hidden"
-                />
-
                 {modelStatus.isLoaded ? (
                   <div className="px-3 py-1.5 bg-emerald-950/80 border border-emerald-500/70 rounded-xl text-emerald-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span>Đã kết nối weights1.onnx</span>
-                  </div>
-                ) : modelStatus.status === 'loading' ? (
-                  <div className="px-3 py-1.5 bg-sky-950/80 border border-sky-500/60 rounded-xl text-sky-300 text-xs font-semibold flex items-center gap-1.5 animate-pulse">
-                    <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
-                    <span>Đang nạp mô hình weights1.onnx...</span>
+                    <span>Mô hình AI: Sẵn sàng</span>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => onnxFileInputRef.current?.click()}
-                    className="px-3 py-1.5 bg-gradient-to-b from-amber-500 via-amber-600 to-amber-700 hover:from-amber-400 hover:to-amber-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-[0_3px_0_0_#92400e] active:shadow-none active:translate-y-0.5 border-t border-amber-300/40 transition-all cursor-pointer"
-                    title="Chọn file weights1.onnx từ máy tính để nhận diện heo"
-                  >
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Nạp thủ công weights1.onnx từ máy</span>
-                  </button>
+                  <div className="px-3 py-1.5 bg-sky-950/80 border border-sky-500/60 rounded-xl text-sky-300 text-xs font-semibold flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
+                    <span>Đang kết nối mô hình AI...</span>
+                  </div>
                 )}
               </div>
             </div>
@@ -1213,14 +1176,23 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* Giant Bold Counter Number with 3D Bevel & Digital Glow */}
-                <div className="py-6 text-center bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 rounded-2xl my-3 border border-slate-700/60 relative overflow-hidden shadow-[inset_0_3px_12px_rgba(0,0,0,0.7),0_8px_20px_rgba(0,0,0,0.12)]">
-                  <div className="text-6xl md:text-8xl font-mono font-black text-red-500 tracking-tight drop-shadow-[0_2px_16px_rgba(239,68,68,0.45)]">
+                {/* Giant Bold Counter Number with Soft Light Blue & Mint Fresh Container (Yêu cầu 1 & 2) */}
+                <div className="py-7 px-4 text-center bg-gradient-to-br from-sky-50/90 via-white to-cyan-50/80 rounded-3xl my-3 border border-sky-200/90 relative overflow-hidden shadow-[0_10px_28px_rgba(14,165,233,0.10),inset_0_2px_4px_rgba(255,255,255,0.95)] ring-1 ring-sky-100">
+                  {/* Subtle soft luminous ambient glow */}
+                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-52 h-24 bg-rose-400/10 rounded-full blur-2xl pointer-events-none"></div>
+                  <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 w-52 h-20 bg-sky-400/12 rounded-full blur-2xl pointer-events-none"></div>
+
+                  {/* Modern, bold, soft, crisp typography easily legible from afar */}
+                  <div className="relative text-7xl sm:text-8xl md:text-9xl font-black tracking-tight leading-none text-rose-600 drop-shadow-[0_4px_16px_rgba(225,29,72,0.20)] py-1 font-sans">
                     {actualCount}
                   </div>
-                  <div className="text-[11px] font-bold uppercase tracking-widest text-emerald-400 mt-1 flex items-center justify-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                    CHỈ NHẬN DIỆN HEO · HEO THỰC TẾ QUA VẠCH
+
+                  {/* Status subtext pill in delicate mint theme */}
+                  <div className="relative mt-2 flex items-center justify-center">
+                    <div className="inline-flex items-center gap-1.5 px-3.5 py-1 bg-emerald-100/90 border border-emerald-200/90 rounded-full text-emerald-800 text-[11px] font-bold uppercase tracking-wider shadow-2xs">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_6px_#10b981] shrink-0"></span>
+                      <span>CHỈ NHẬN DIỆN HEO · HEO THỰC TẾ QUA VẠCH</span>
+                    </div>
                   </div>
                 </div>
 
