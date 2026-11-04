@@ -294,9 +294,9 @@ export default function App() {
       .then(loaded => {
         setModelStatus(onnxDetectorRef.current.getStatus());
         if (loaded) {
-          setStatusMsg('Đã kết nối thành công mô hình weights1.onnx');
+          setStatusMsg('Đã kết nối thành công weights1.onnx từ GitHub Release (v1.0.0)');
         } else {
-          setStatusMsg('Chưa tìm thấy /weights1.onnx. Bấm "Nạp thủ công weights1.onnx từ máy"');
+          setStatusMsg('Chưa nạp được weights1.onnx từ GitHub. Bạn có thể bấm "Nạp thủ công weights1.onnx từ máy"');
         }
       })
       .catch(() => {

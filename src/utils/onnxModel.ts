@@ -9,6 +9,9 @@ export interface ModelStatusInfo {
   modelName: string;
 }
 
+export const GITHUB_MODEL_URL =
+  'https://github.com/lamhau2103-maker/APP-DEM-HEO/releases/download/v1.0.0/weights1.onnx';
+
 export class OnnxPigDetector {
   private session: any = null;
   private isLoaded = false;
@@ -56,91 +59,76 @@ export class OnnxPigDetector {
   }
 
   /**
-   * Tự động liên kết và nạp file /weights1.onnx từ đường dẫn gốc (Yêu cầu 3)
+   * Tự động liên kết và nạp file weights1.onnx trực tiếp từ GitHub Release của người dùng
    */
-  public async autoLoadModel(): Promise<boolean> {
+  public async autoLoadModel(url = GITHUB_MODEL_URL): Promise<boolean> {
     const ort = this.getOrt();
     if (!ort) {
       // Đợi thêm một nhịp nếu CDN đang tải
-      setTimeout(() => this.autoLoadModel(), 500);
+      setTimeout(() => this.autoLoadModel(url), 500);
       return false;
     }
 
     try {
       this.status = 'loading';
-      this.statusMessage = 'Đang nạp mô hình weights1.onnx...';
+      this.statusMessage = 'Đang nạp mô hình weights1.onnx từ GitHub Release...';
 
-      // Cấu hình CDN WASM v1.18.0 ngay trước khi tạo session (Yêu cầu 2)
+      // Cấu hình CDN WASM v1.18.0 ngay trước khi tạo session
       ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
       ort.env.wasm.numThreads = 1;
       ort.env.wasm.proxy = false;
 
-      // Thử nạp từ đường dẫn gốc /weights1.onnx (Yêu cầu 3)
+      // Nạp trực tiếp từ đường dẫn GitHub Release
+      let created = false;
       try {
-        this.session = await ort.InferenceSession.create('/weights1.onnx', {
+        this.session = await ort.InferenceSession.create(url, {
           executionProviders: ['wasm', 'webgl'],
         });
+        created = true;
       } catch {
-        this.session = await ort.InferenceSession.create('/weights1.onnx', {
-          executionProviders: ['wasm'],
-        });
+        try {
+          this.session = await ort.InferenceSession.create(url, {
+            executionProviders: ['wasm'],
+          });
+          created = true;
+        } catch {
+          // Fallback tải buffer qua fetch (hỗ trợ redirect GitHub objects.githubusercontent.com)
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+          }
+          const buffer = await resp.arrayBuffer();
+          this.session = await ort.InferenceSession.create(new Uint8Array(buffer), {
+            executionProviders: ['wasm'],
+          });
+          created = true;
+        }
       }
 
-      this.isLoaded = true;
-      this.status = 'loaded';
-      this.modelName = 'weights1.onnx';
-      this.statusMessage = 'Đã kết nối weights1.onnx';
-      return true;
+      if (created && this.session) {
+        this.isLoaded = true;
+        this.status = 'loaded';
+        this.modelName = 'weights1.onnx (GitHub Release)';
+        this.statusMessage = 'Đã kết nối weights1.onnx (GitHub Release)';
+        return true;
+      }
+
+      throw new Error('Không thể khởi tạo session ONNX');
     } catch (err: unknown) {
-      // Khi chạy trên Preview chưa có file vật lý /weights1.onnx, bắt lỗi để không làm sập web
+      // Bắt lỗi an toàn nếu mất mạng hoặc link chưa sẵn sàng
       this.isLoaded = false;
       this.status = 'error';
-      this.statusMessage = 'Chưa tìm thấy /weights1.onnx (Vui lòng nạp thủ công từ máy)';
+      const msg = err instanceof Error ? err.message : String(err);
+      this.statusMessage = `Chưa nạp được weights1.onnx từ GitHub (${msg}). Có thể nạp thủ công từ máy.`;
       return false;
     }
   }
 
   /**
-   * Nạp tệp từ URL bất kỳ
+   * Nạp tệp từ URL bất kỳ (mặc định là GitHub Release)
    */
-  public async loadModelFromUrl(url = '/weights1.onnx'): Promise<boolean> {
-    const ort = this.getOrt();
-    if (!ort) {
-      this.status = 'error';
-      this.statusMessage = 'Thư viện ONNX Runtime Web CDN chưa sẵn sàng';
-      return false;
-    }
-
-    try {
-      this.status = 'loading';
-      this.statusMessage = `Đang nạp mô hình từ ${url}...`;
-
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-      ort.env.wasm.numThreads = 1;
-      ort.env.wasm.proxy = false;
-
-      try {
-        this.session = await ort.InferenceSession.create(url, {
-          executionProviders: ['wasm', 'webgl'],
-        });
-      } catch {
-        this.session = await ort.InferenceSession.create(url, {
-          executionProviders: ['wasm'],
-        });
-      }
-
-      this.isLoaded = true;
-      this.status = 'loaded';
-      this.modelName = url.split('/').pop() || 'weights1.onnx';
-      this.statusMessage = 'Đã kết nối weights1.onnx';
-      return true;
-    } catch (err: unknown) {
-      this.isLoaded = false;
-      this.status = 'error';
-      const msg = err instanceof Error ? err.message : String(err);
-      this.statusMessage = `Lỗi tải ${url}: ${msg}`;
-      throw err;
-    }
+  public async loadModelFromUrl(url = GITHUB_MODEL_URL): Promise<boolean> {
+    return this.autoLoadModel(url);
   }
 
   /**

@@ -72,14 +72,14 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
     try {
       const success = await onnxDetector.autoLoadModel();
       if (success) {
-        onModelLoaded('weights1.onnx (Gốc)');
-        setSuccessMsg('Đã kết nối và nạp thành công /weights1.onnx!');
+        onModelLoaded('weights1.onnx (GitHub Release)');
+        setSuccessMsg('Đã kết nối và nạp thành công weights1.onnx từ GitHub Release v1.0.0!');
       } else {
-        setErrorMsg('Chưa tìm thấy /weights1.onnx trên máy chủ hoặc preview. Vui lòng bấm nút "Tải Lên Tệp weights1.onnx" bên dưới để chọn file từ máy.');
+        setErrorMsg('Chưa thể kết nối tới GitHub Release. Vui lòng kiểm tra kết nối mạng hoặc bấm nút "Tải Lên Tệp weights1.onnx" để chọn file từ máy.');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Lỗi kết nối';
-      setErrorMsg(`Không thể nạp tệp: ${msg}`);
+      setErrorMsg(`Không thể nạp tệp từ GitHub Release: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -206,7 +206,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
                 className="px-4 py-3 bg-gradient-to-b from-white via-slate-50 to-slate-100 hover:from-white hover:to-slate-200 text-slate-800 font-bold text-xs rounded-2xl flex items-center gap-1.5 border border-slate-200 shadow-[0_3px_0_0_#cbd5e1] active:shadow-none active:translate-y-0.5 transition-all cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className="w-4 h-4 text-slate-600" />
-                Nạp lại file gốc server
+                Nạp từ GitHub Release (v1.0.0)
               </button>
             </div>
           </div>
