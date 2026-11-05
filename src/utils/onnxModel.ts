@@ -139,15 +139,27 @@ export class OnnxPigDetector {
    * Cấu hình môi trường WASM chuẩn của ONNX Runtime Web
    */
   private configureOrtEnv(ort: any) {
-    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-    const canUseThreads =
-      typeof crossOriginIsolated !== 'undefined' &&
-      crossOriginIsolated &&
-      typeof navigator !== 'undefined' &&
-      navigator.hardwareConcurrency;
-    ort.env.wasm.numThreads = canUseThreads ? Math.min(4, navigator.hardwareConcurrency) : 1;
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+    ort.env.wasm.numThreads = navigator.hardwareConcurrency ? Math.min(4, navigator.hardwareConcurrency) : 2;
     ort.env.wasm.simd = true;
-    ort.env.wasm.proxy = false;
+  }
+
+  /**
+   * Khởi tạo session ONNX với executionProviders: ['wasm']
+   * Tự động fallback numThreads = 1 nếu trình duyệt không bật SharedArrayBuffer
+   */
+  private async createWasmSession(ort: any, modelBytes: Uint8Array): Promise<any> {
+    this.configureOrtEnv(ort);
+    try {
+      return await ort.InferenceSession.create(modelBytes, {
+        executionProviders: ['wasm'],
+      });
+    } catch {
+      ort.env.wasm.numThreads = 1;
+      return await ort.InferenceSession.create(modelBytes, {
+        executionProviders: ['wasm'],
+      });
+    }
   }
 
   /**
@@ -186,47 +198,23 @@ export class OnnxPigDetector {
       this.status = 'loading';
       this.statusMessage = 'Đang kết nối mô hình AI...';
 
-      this.configureOrtEnv(ort);
-
       // 1. Kiểm tra cache IndexedDB để nạp tức thì cho các lần mở sau
       let buffer = await getCachedModelBuffer(url);
 
-      // 2. Nếu chưa có trong IndexedDB, tải từ "/weights1.onnx"
+      // 2. Nếu chưa có trong IndexedDB, tải trực tiếp từ file tĩnh nội bộ "/weights1.onnx"
       if (!buffer) {
-        try {
-          const resp = await fetch(url);
-          if (resp.ok) {
-            buffer = await resp.arrayBuffer();
-          }
-        } catch {
-          // ignore
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          throw new Error(`Không thể tải tệp ${url} (HTTP ${resp.status})`);
         }
+        buffer = await resp.arrayBuffer();
+        // Lưu cache ArrayBuffer vào IndexedDB sau lần tải đầu tiên
+        await setCachedModelBuffer(url, buffer);
       }
-
-      // Fallback qua proxy nội bộ nếu cần
-      if (!buffer) {
-        try {
-          const proxyResp = await fetch('/api/model-proxy');
-          if (proxyResp.ok) {
-            buffer = await proxyResp.arrayBuffer();
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      if (!buffer) {
-        throw new Error('Không thể tải tệp /weights1.onnx');
-      }
-
-      // Lưu cache ArrayBuffer vào IndexedDB cho lần truy cập tiếp theo
-      setCachedModelBuffer(url, buffer).catch(() => {});
 
       const modelBytes = new Uint8Array(buffer);
-      // Dùng executionProviders: ['wasm'] để tương thích tuyệt đối với mọi trình duyệt và mô hình nén INT8
-      this.session = await ort.InferenceSession.create(modelBytes, {
-        executionProviders: ['wasm'],
-      });
+      // Sử dụng executionProviders: ['wasm'] để tương thích tuyệt đối trên mọi trình duyệt điện thoại
+      this.session = await this.createWasmSession(ort, modelBytes);
 
       if (this.session) {
         this.syncInputDimensionsFromSession();
@@ -268,15 +256,11 @@ export class OnnxPigDetector {
       this.status = 'loading';
       this.statusMessage = `Đang nạp ${fileName}...`;
 
-      this.configureOrtEnv(ort);
-
       const modelBytes = new Uint8Array(buffer);
-      this.session = await ort.InferenceSession.create(modelBytes, {
-        executionProviders: ['wasm'],
-      });
+      this.session = await this.createWasmSession(ort, modelBytes);
 
       this.syncInputDimensionsFromSession();
-      setCachedModelBuffer(DEFAULT_MODEL_URL, buffer).catch(() => {});
+      await setCachedModelBuffer(DEFAULT_MODEL_URL, buffer);
 
       this.isLoaded = true;
       this.status = 'loaded';

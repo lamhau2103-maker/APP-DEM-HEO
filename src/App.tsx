@@ -1157,7 +1157,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Trạng thái mô hình AI tự động từ GitHub Release (Yêu cầu 1) */}
+              {/* Trạng thái mô hình AI tự động từ /weights1.onnx (kèm cache IndexedDB) */}
               <div className="flex items-center gap-2">
                 {modelStatus.isLoaded ? (
                   <div className="px-3 py-1.5 bg-emerald-950/80 border border-emerald-500/70 rounded-xl text-emerald-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
@@ -1240,8 +1240,18 @@ export default function App() {
                 </button>
 
                 {/* Status Message */}
-                <div className="text-[11px] font-medium text-sky-900 px-3 py-2 rounded-2xl bg-sky-50/80 border border-sky-200/60 flex items-center gap-2 shadow-2xs backdrop-blur-xs">
-                  <span className="w-2 h-2 rounded-full bg-sky-500 animate-ping shrink-0"></span>
+                <div
+                  className={`text-[11px] font-bold px-3 py-2 rounded-2xl border flex items-center gap-2 shadow-2xs backdrop-blur-xs ${
+                    modelStatus.isLoaded
+                      ? 'text-emerald-800 bg-emerald-50/90 border-emerald-200/80'
+                      : 'text-sky-900 bg-sky-50/80 border-sky-200/60'
+                  }`}
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full shrink-0 ${
+                      modelStatus.isLoaded ? 'bg-emerald-500 shadow-[0_0_6px_#10b981]' : 'bg-sky-500 animate-ping'
+                    }`}
+                  ></span>
                   <span className="truncate">{statusMsg}</span>
                 </div>
 
