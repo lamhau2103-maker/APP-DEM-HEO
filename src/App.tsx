@@ -241,7 +241,10 @@ export default function App() {
   const [backwardCount, setBackwardCount] = useState(0);
   const [direction, setDirection] = useState<CountDirection>('IN_TO_OUT');
   const [countMode, setCountMode] = useState<'net' | 'gross'>('net');
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.25);
+  
+  // Nâng ngưỡng độ tin cậy (Confidence Threshold) mặc định lên 0.65 để lọc bỏ triệt để nhận diện nhầm
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.65);
+  
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isCountingPaused, setIsCountingPaused] = useState(false);
 
@@ -1486,7 +1489,7 @@ export default function App() {
           }`}
         >
           <Camera className={`w-5 h-5 mb-0.5 ${activeTab === 'camera' ? 'drop-shadow-xs' : 'text-slate-600'}`} />
-          <span className="text-[11px] leading-tight">Camera &amp; Đếm</span>
+          <span className="text-[11px] leading-tight">Camera & Đếm</span>
         </button>
 
         {/* 2. Báo Cáo (3D Button) */}
