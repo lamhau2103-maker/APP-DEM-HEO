@@ -93,11 +93,12 @@ export class OnnxPigDetector {
   private preCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
   private preCtx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null;
   private float32Data: Float32Array = new Float32Array(3 * 640 * 640);
+  private loadingPromise: Promise<boolean> | null = null;
 
   constructor() {
     this.initPreCanvas(640, 640);
     // Tự động tìm và nạp file /weights1.onnx khi ứng dụng khởi chạy
-    this.autoLoadModel();
+    this.autoLoadModel(DEFAULT_MODEL_URL);
   }
 
   private initPreCanvas(w = 640, h = 640) {
@@ -134,6 +135,29 @@ export class OnnxPigDetector {
     return null;
   }
 
+  /**
+   * Đợi thư viện ONNX Runtime Web sẵn sàng (tự động chèn script CDN nếu cần)
+   */
+  private async waitForOrt(timeoutMs = 15000): Promise<any> {
+    const existing = this.getOrt();
+    if (existing) return existing;
+
+    if (typeof document !== 'undefined' && !document.querySelector('script[src*="onnxruntime-web"]')) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js';
+      script.async = true;
+      document.head.appendChild(script);
+    }
+
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const ort = this.getOrt();
+      if (ort) return ort;
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return null;
+  }
+
   public getStatus(): ModelStatusInfo {
     return {
       isLoaded: this.isLoaded,
@@ -148,23 +172,31 @@ export class OnnxPigDetector {
    */
   private configureOrtEnv(ort: any) {
     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
-    ort.env.wasm.numThreads = navigator.hardwareConcurrency ? Math.min(4, navigator.hardwareConcurrency) : 2;
+    const canUseThreads =
+      typeof crossOriginIsolated !== 'undefined' &&
+      crossOriginIsolated &&
+      typeof navigator !== 'undefined' &&
+      Boolean(navigator.hardwareConcurrency);
+    ort.env.wasm.numThreads = canUseThreads ? Math.min(4, navigator.hardwareConcurrency) : 1;
     ort.env.wasm.simd = true;
+    ort.env.wasm.proxy = false;
   }
 
   /**
    * Khởi tạo session ONNX với executionProviders: ['wasm']
    * Tự động fallback numThreads = 1 nếu trình duyệt không bật SharedArrayBuffer
    */
-  private async createWasmSession(ort: any, modelBytes: Uint8Array): Promise<any> {
+  private async createWasmSession(ort: any, modelSource: Uint8Array | string): Promise<any> {
     this.configureOrtEnv(ort);
     try {
-      return await ort.InferenceSession.create(modelBytes, {
+      return await ort.InferenceSession.create(modelSource, {
         executionProviders: ['wasm'],
       });
-    } catch {
+    } catch (err) {
+      console.warn('[ONNX] Thử lại khởi tạo session WASM với numThreads = 1:', err);
       ort.env.wasm.numThreads = 1;
-      return await ort.InferenceSession.create(modelBytes, {
+      ort.env.wasm.proxy = false;
+      return await ort.InferenceSession.create(modelSource, {
         executionProviders: ['wasm'],
       });
     }
@@ -193,37 +225,70 @@ export class OnnxPigDetector {
   }
 
   /**
-   * Tự động nạp trực tiếp mô hình từ "/weights1.onnx" kèm lưu cache IndexedDB
+   * Tự động nạp trực tiếp mô hình từ "/weights1.onnx" kèm cơ chế try/catch & dự phòng IndexedDB Cache
    */
   public async autoLoadModel(url = DEFAULT_MODEL_URL): Promise<boolean> {
-    const ort = this.getOrt();
+    if (this.isLoaded && this.session) {
+      return true;
+    }
+    if (this.loadingPromise) {
+      return this.loadingPromise;
+    }
+
+    this.loadingPromise = this.performLoadModel(url).finally(() => {
+      this.loadingPromise = null;
+    });
+    return this.loadingPromise;
+  }
+
+  private async performLoadModel(url = DEFAULT_MODEL_URL): Promise<boolean> {
+    this.status = 'loading';
+    this.statusMessage = 'Đang kết nối mô hình AI...';
+
+    const ort = await this.waitForOrt();
     if (!ort) {
-      setTimeout(() => this.autoLoadModel(url), 400);
+      this.isLoaded = false;
+      this.status = 'error';
+      this.statusMessage = 'Không thể tải thư viện ONNX Runtime Web từ CDN.';
+      console.error('[ONNX] Không tìm thấy window.ort sau khi chờ CDN.');
       return false;
     }
 
+    this.configureOrtEnv(ort);
+
+    // Bước 1: Thử nạp nhanh từ IndexedDB Cache nếu đã lưu từ lần mở trước
     try {
-      this.status = 'loading';
-      this.statusMessage = 'Đang kết nối mô hình AI...';
-
-      // 1. Kiểm tra cache IndexedDB để nạp tức thì cho các lần mở sau
-      let buffer = await getCachedModelBuffer(url);
-
-      // 2. Nếu chưa có trong IndexedDB, tải trực tiếp từ file tĩnh nội bộ "/weights1.onnx"
-      if (!buffer) {
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          throw new Error(`Không thể tải tệp ${url} (HTTP ${resp.status})`);
+      const cachedBuffer = await getCachedModelBuffer(url);
+      if (cachedBuffer && cachedBuffer.byteLength > 1024) {
+        this.session = await this.createWasmSession(ort, new Uint8Array(cachedBuffer));
+        if (this.session) {
+          this.syncInputDimensionsFromSession();
+          this.isLoaded = true;
+          this.status = 'loaded';
+          this.modelName = 'weights1.onnx';
+          this.statusMessage = 'Đã kết nối mô hình AI (Sẵn sàng)';
+          return true;
         }
-        buffer = await resp.arrayBuffer();
-        // Lưu cache ArrayBuffer vào IndexedDB sau lần tải đầu tiên
-        await setCachedModelBuffer(url, buffer);
+      }
+    } catch (cacheErr) {
+      console.warn('[ONNX] Cache IndexedDB không hợp lệ, chuyển sang tải mới từ', url, cacheErr);
+    }
+
+    // Bước 2: Nạp trực tiếp từ đường dẫn tĩnh nội bộ "/weights1.onnx" (kèm try/catch chi tiết)
+    try {
+      const resp = await fetch(url, { cache: 'no-cache' });
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status} khi tải ${url}`);
+      }
+      const buffer = await resp.arrayBuffer();
+      if (!buffer || buffer.byteLength < 1024) {
+        throw new Error(`Tệp ${url} trống hoặc không hợp lệ (${buffer?.byteLength ?? 0} bytes)`);
       }
 
-      const modelBytes = new Uint8Array(buffer);
-      // Sử dụng executionProviders: ['wasm'] để tương thích tuyệt đối trên mọi trình duyệt điện thoại
-      this.session = await this.createWasmSession(ort, modelBytes);
+      // Lưu vào IndexedDB Cache cho các lần mở tiếp theo
+      await setCachedModelBuffer(url, buffer);
 
+      this.session = await this.createWasmSession(ort, new Uint8Array(buffer));
       if (this.session) {
         this.syncInputDimensionsFromSession();
         this.isLoaded = true;
@@ -232,21 +297,48 @@ export class OnnxPigDetector {
         this.statusMessage = 'Đã kết nối mô hình AI (Sẵn sàng)';
         return true;
       }
+    } catch (firstErr: unknown) {
+      console.error(`[ONNX] Lần nạp đầu từ "${url}" thất bại, đang thử lại:`, firstErr);
 
-      throw new Error('Không thể khởi tạo session ONNX');
-    } catch (err: unknown) {
-      this.isLoaded = false;
-      this.status = 'error';
-      const msg = err instanceof Error ? err.message : String(err);
-      this.statusMessage = `Đang kết nối lại mô hình AI... (${msg})`;
-      return false;
+      // Bước 3: Tự động thử lại bằng cách gọi trực tiếp ort.InferenceSession.create("/weights1.onnx") hoặc đọc lại IndexedDB Cache
+      try {
+        const retryCache = await getCachedModelBuffer(url);
+        if (retryCache && retryCache.byteLength > 1024) {
+          this.session = await this.createWasmSession(ort, new Uint8Array(retryCache));
+        } else {
+          this.session = await this.createWasmSession(ort, url);
+        }
+
+        if (this.session) {
+          this.syncInputDimensionsFromSession();
+          this.isLoaded = true;
+          this.status = 'loaded';
+          this.modelName = 'weights1.onnx';
+          this.statusMessage = 'Đã kết nối mô hình AI (Sẵn sàng)';
+          return true;
+        }
+      } catch (retryErr: unknown) {
+        console.error('[ONNX] Thử lại nạp mô hình "/weights1.onnx" thất bại chi tiết:', retryErr);
+        this.isLoaded = false;
+        this.status = 'error';
+        const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        this.statusMessage = `Lỗi nạp mô hình AI: ${msg}`;
+        return false;
+      }
     }
+
+    this.isLoaded = false;
+    this.status = 'error';
+    this.statusMessage = 'Không thể khởi tạo mô hình /weights1.onnx';
+    return false;
   }
 
   /**
    * Nạp tệp từ URL bất kỳ (mặc định là "/weights1.onnx")
    */
   public async loadModelFromUrl(url = DEFAULT_MODEL_URL): Promise<boolean> {
+    this.isLoaded = false;
+    this.session = null;
     return this.autoLoadModel(url);
   }
 
@@ -254,7 +346,7 @@ export class OnnxPigDetector {
    * Nạp thủ công tệp weights1.onnx từ ArrayBuffer
    */
   public async loadModelFromBuffer(buffer: ArrayBuffer, fileName = 'weights1.onnx'): Promise<boolean> {
-    const ort = this.getOrt();
+    const ort = await this.waitForOrt();
     if (!ort) {
       throw new Error('Thư viện ONNX Runtime Web CDN chưa được tải. Vui lòng kiểm tra kết nối mạng.');
     }
@@ -276,6 +368,7 @@ export class OnnxPigDetector {
       this.statusMessage = 'Đã kết nối mô hình AI (Sẵn sàng)';
       return true;
     } catch (err: unknown) {
+      console.error('[ONNX] Lỗi nạp file từ ArrayBuffer:', err);
       this.isLoaded = false;
       this.status = 'error';
       const msg = err instanceof Error ? err.message : String(err);

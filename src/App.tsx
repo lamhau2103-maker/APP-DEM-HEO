@@ -306,23 +306,32 @@ export default function App() {
     }
   }, [linePoints]);
 
-  // Tự động nạp trực tiếp mô hình "/weights1.onnx" kèm IndexedDB cache
-  useEffect(() => {
+  // Tự động nạp trực tiếp mô hình "/weights1.onnx" kèm IndexedDB cache & xử lý lỗi chi tiết
+  const triggerLoadModel = useCallback(() => {
     setStatusMsg('Đang kết nối mô hình AI...');
+    setModelStatus(onnxDetectorRef.current.getStatus());
     onnxDetectorRef.current
       .autoLoadModel('/weights1.onnx')
       .then(loaded => {
-        setModelStatus(onnxDetectorRef.current.getStatus());
+        const current = onnxDetectorRef.current.getStatus();
+        setModelStatus(current);
         if (loaded) {
           setStatusMsg('Đã kết nối mô hình AI (Sẵn sàng)');
         } else {
-          setStatusMsg('Đang kết nối lại mô hình AI...');
+          setStatusMsg(current.statusMessage || 'Lỗi nạp mô hình /weights1.onnx. Nhấn Thử lại để kết nối.');
         }
       })
-      .catch(() => {
-        setModelStatus(onnxDetectorRef.current.getStatus());
+      .catch(err => {
+        console.error('[App] Lỗi khởi tạo mô hình /weights1.onnx:', err);
+        const current = onnxDetectorRef.current.getStatus();
+        setModelStatus(current);
+        setStatusMsg(current.statusMessage || 'Lỗi nạp mô hình /weights1.onnx.');
       });
   }, []);
+
+  useEffect(() => {
+    triggerLoadModel();
+  }, [triggerLoadModel]);
 
   // Live Digital Clock
   useEffect(() => {
@@ -410,11 +419,26 @@ export default function App() {
     videoEl.muted = true;
     videoEl.controls = false;
     videoEl.setAttribute('autoplay', '');
-    videoEl.setAttribute('playsinline', 'true');
-    videoEl.setAttribute('webkit-playsinline', 'true');
+    videoEl.setAttribute('playsinline', '');
+    videoEl.setAttribute('webkit-playsinline', '');
     videoEl.setAttribute('x5-playsinline', 'true');
     videoEl.setAttribute('x5-video-player-type', 'h5');
     videoEl.setAttribute('muted', '');
+
+    const preventNativeFullscreen = () => {
+      try {
+        if ((videoEl as any).webkitExitFullscreen) {
+          (videoEl as any).webkitExitFullscreen();
+        }
+        if (document.fullscreenElement === videoEl && document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+        videoEl.play().catch(() => {});
+      } catch {
+        // ignore
+      }
+    };
+    (videoEl as any).onwebkitbeginfullscreen = preventNativeFullscreen;
   }, []);
 
   // Đảm bảo thẻ <video> không bị đơ hình khi chuyển đổi khung nhìn / tab
@@ -1111,10 +1135,10 @@ export default function App() {
               </div>
             </div>
 
-            {/* Khung chứa cố định (Container) giữ <video> và <canvas> gọn gàng bên trong, chống văng toàn màn hình */}
-            <div className="relative w-full bg-slate-950 flex items-center justify-center overflow-hidden p-0">
-              <div className="relative w-full aspect-[4/3] max-h-[480px] bg-black overflow-hidden flex items-center justify-center mx-auto">
-                {/* Luồng hiển thị <video> gốc chạy tự nhiên 30-60 FPS, cố định autoplay + playsinline + muted */}
+            {/* Khung chứa cố định (Container) giữ <video> và <canvas> gọn gàng bên trong, chống tràn/văng trên điện thoại */}
+            <div className="relative w-full h-auto max-h-full bg-slate-950 flex items-center justify-center overflow-hidden p-0">
+              <div className="relative w-full h-auto max-h-full aspect-[4/3] bg-black overflow-hidden flex items-center justify-center mx-auto">
+                {/* Luồng hiển thị <video> camera trực tiếp: bắt buộc có autoplay playsinline muted webkit-playsinline */}
                 <video
                   ref={webcamVideoRef}
                   autoPlay
@@ -1122,9 +1146,12 @@ export default function App() {
                   muted
                   disablePictureInPicture
                   controls={false}
-                  className={`absolute inset-0 w-full h-full object-contain pointer-events-none select-none ${
-                    sourceMode === 'webcam' ? 'opacity-100 z-0' : 'opacity-0 -z-10'
-                  }`}
+                  {...({ 'webkit-playsinline': 'true', playsinline: 'true' } as any)}
+                  className={
+                    sourceMode === 'webcam'
+                      ? 'relative w-full h-auto max-h-full object-contain pointer-events-none select-none block z-0'
+                      : 'absolute w-px h-px opacity-0 pointer-events-none -z-10'
+                  }
                 />
                 <video
                   ref={uploadedVideoRef}
@@ -1134,24 +1161,28 @@ export default function App() {
                   muted
                   disablePictureInPicture
                   controls={false}
+                  {...({ 'webkit-playsinline': 'true', playsinline: 'true' } as any)}
                   onPlay={() => setIsPaused(false)}
                   onPause={() => setIsPaused(true)}
-                  className={`absolute inset-0 w-full h-full object-contain pointer-events-none select-none ${
-                    sourceMode === 'upload' ? 'opacity-100 z-0' : 'opacity-0 -z-10'
-                  }`}
+                  className={
+                    sourceMode === 'upload'
+                      ? 'relative w-full h-auto max-h-full object-contain pointer-events-none select-none block z-0'
+                      : 'absolute w-px h-px opacity-0 pointer-events-none -z-10'
+                  }
                 />
 
-                {/* Thẻ <canvas> trong suốt đè khít lên trên video bên trong container */}
+                {/* Thẻ <canvas> trong suốt đè khít lên trên video bên trong container đúng vị trí vạch đếm LINEZONE */}
                 <canvas
                   ref={canvasRef}
                   style={{ cursor: canvasCursor }}
+                  {...({ autoplay: 'true', playsinline: 'true', muted: 'true', 'webkit-playsinline': 'true' } as any)}
                   onMouseDown={handlePointerDown}
                   onMouseMove={handlePointerMove}
                   onMouseUp={handlePointerUp}
                   onTouchStart={handlePointerDown}
                   onTouchMove={handlePointerMove}
                   onTouchEnd={handlePointerUp}
-                  className="absolute inset-0 w-full h-full object-contain bg-transparent z-10 touch-none"
+                  className="absolute inset-0 w-full h-full max-h-full object-contain bg-transparent z-10 touch-none"
                 />
 
                 {lineFlash.active && (
@@ -1218,13 +1249,22 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Trạng thái mô hình AI tự động từ /weights1.onnx (kèm cache IndexedDB) */}
+              {/* Trạng thái mô hình AI tự động từ /weights1.onnx (kèm cache IndexedDB & nút Thử lại nếu lỗi) */}
               <div className="flex items-center gap-2">
                 {modelStatus.isLoaded ? (
                   <div className="px-3 py-1.5 bg-emerald-950/80 border border-emerald-500/70 rounded-xl text-emerald-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <span>Đã kết nối mô hình AI (Sẵn sàng)</span>
                   </div>
+                ) : modelStatus.status === 'error' ? (
+                  <button
+                    onClick={triggerLoadModel}
+                    className="px-3 py-1.5 bg-rose-950/90 hover:bg-rose-900 border border-rose-500/70 rounded-xl text-rose-200 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title={modelStatus.statusMessage}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                    <span className="max-w-[220px] truncate">{modelStatus.statusMessage || 'Lỗi nạp AI - Nhấn thử lại'}</span>
+                  </button>
                 ) : (
                   <div className="px-3 py-1.5 bg-sky-950/80 border border-sky-500/60 rounded-xl text-sky-300 text-xs font-semibold flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping"></span>
