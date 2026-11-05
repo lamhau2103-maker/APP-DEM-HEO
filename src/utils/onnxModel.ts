@@ -90,8 +90,8 @@ export class OnnxPigDetector {
   private modelName = 'weights1.onnx';
   private inputWidth = 640;
   private inputHeight = 640;
-  private preCanvas: HTMLCanvasElement | null = null;
-  private preCtx: CanvasRenderingContext2D | null = null;
+  private preCanvas: OffscreenCanvas | HTMLCanvasElement | null = null;
+  private preCtx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null;
   private float32Data: Float32Array = new Float32Array(3 * 640 * 640);
 
   constructor() {
@@ -106,7 +106,15 @@ export class OnnxPigDetector {
     if (this.float32Data.length !== 3 * w * h) {
       this.float32Data = new Float32Array(3 * w * h);
     }
-    if (typeof document !== 'undefined') {
+    if (typeof OffscreenCanvas !== 'undefined') {
+      if (!this.preCanvas || !(this.preCanvas instanceof OffscreenCanvas)) {
+        this.preCanvas = new OffscreenCanvas(this.inputWidth, this.inputHeight);
+      } else {
+        this.preCanvas.width = this.inputWidth;
+        this.preCanvas.height = this.inputHeight;
+      }
+      this.preCtx = this.preCanvas.getContext('2d', { willReadFrequently: true });
+    } else if (typeof document !== 'undefined') {
       if (!this.preCanvas) {
         this.preCanvas = document.createElement('canvas');
       }

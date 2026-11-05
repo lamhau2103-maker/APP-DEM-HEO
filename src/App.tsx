@@ -221,6 +221,7 @@ export default function App() {
   // --- Computer Vision Engines (100% ONNX Inference) ---
   const onnxDetectorRef = useRef<OnnxPigDetector>(new OnnxPigDetector());
   const trackerRef = useRef<PigTracker | null>(null);
+  const activeTracksRef = useRef<PigTrack[]>([]);
   const animFrameIdRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -421,11 +422,9 @@ export default function App() {
       return;
     }
 
-    let lastTime = performance.now();
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
     let isProcessing = false;
-    let cachedDetections: DetectionBox[] = [];
 
     const loop = () => {
       const canvas = canvasRef.current;
@@ -447,8 +446,6 @@ export default function App() {
         lastFpsUpdate = now;
       }
 
-      lastTime = now;
-
       const w = 640;
       const h = 480;
       if (canvas.width !== w || canvas.height !== h) {
@@ -457,76 +454,59 @@ export default function App() {
       }
 
       const isModelReady = onnxDetectorRef.current.getStatus().isLoaded;
-
-      // 1. Luồng Video (30-60 FPS mượt mà) tách biệt hoàn toàn với luồng AI (isProcessing)
-      if (sourceMode === 'webcam') {
-        const video = webcamVideoRef.current;
-        if (video && video.readyState >= 2) {
-          ctx.drawImage(video, 0, 0, w, h);
-          if (isModelReady && !isProcessing) {
-            isProcessing = true;
-            onnxDetectorRef.current
-              .detectPigs(video, confidenceThreshold, w, h)
-              .then(boxes => {
-                cachedDetections = boxes;
-              })
-              .catch(err => {
-                console.error('Lỗi suy luận AI:', err);
-              })
-              .finally(() => {
-                isProcessing = false;
-              });
-          }
-        } else {
-          ctx.fillStyle = '#0f172a';
-          ctx.fillRect(0, 0, w, h);
-          ctx.fillStyle = '#94a3b8';
-          ctx.font = '14px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('Đang kết nối luồng Camera trực tiếp...', w / 2, h / 2);
-        }
-      } else if (sourceMode === 'upload') {
-        const video = uploadedVideoRef.current;
-        if (video && video.readyState >= 2 && !video.paused) {
-          ctx.drawImage(video, 0, 0, w, h);
-          if (isModelReady && !isProcessing) {
-            isProcessing = true;
-            onnxDetectorRef.current
-              .detectPigs(video, confidenceThreshold, w, h)
-              .then(boxes => {
-                cachedDetections = boxes;
-              })
-              .catch(err => {
-                console.error('Lỗi suy luận AI:', err);
-              })
-              .finally(() => {
-                isProcessing = false;
-              });
-          }
-        } else {
-          ctx.fillStyle = '#0f172a';
-          ctx.fillRect(0, 0, w, h);
-          ctx.fillStyle = '#94a3b8';
-          ctx.font = '14px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('Chưa có video hoặc video đang dừng. Vui lòng chọn tệp video.', w / 2, h / 2);
-        }
-      }
-
       if (!isModelReady) {
-        cachedDetections = [];
+        activeTracksRef.current = [];
       }
 
-      const filteredDetections = cachedDetections.filter(b => b.confidence >= confidenceThreshold);
+      // 1. Luồng Video chạy tự nhiên ở 30-60 FPS trên thẻ <video>, <canvas> trong suốt đè lên trên
+      const activeVideo = sourceMode === 'webcam' ? webcamVideoRef.current : uploadedVideoRef.current;
+      const isVideoReady =
+        activeVideo &&
+        activeVideo.readyState >= 2 &&
+        (sourceMode === 'webcam' || !activeVideo.paused || activeVideo.currentTime > 0);
 
-      // 2. Multi-Object Tracker / Centroid Tracker chạy mượt ở 60 FPS (Yêu cầu 4 & 6)
-      let activeTracks: PigTrack[] = [];
-      if (trackerRef.current) {
-        const result = trackerRef.current.update(filteredDetections, w, h);
-        activeTracks = result.tracks;
+      if (isVideoReady && activeVideo) {
+        // Xóa trong suốt mặt phẳng canvas để hiển thị trực tiếp thẻ <video> mượt mà bên dưới
+        ctx.clearRect(0, 0, w, h);
+
+        // Chỉ khi isProcessing === false mới lấy frame hiện tại chạy ONNX ngầm
+        if (!isPaused && isModelReady && !isProcessing) {
+          isProcessing = true;
+          onnxDetectorRef.current
+            .detectPigs(activeVideo, confidenceThreshold, w, h)
+            .then(boxes => {
+              const filteredDetections = boxes.filter(b => b.confidence >= confidenceThreshold);
+              if (trackerRef.current) {
+                const result = trackerRef.current.update(filteredDetections, w, h);
+                activeTracksRef.current = result.tracks;
+              }
+            })
+            .catch(err => {
+              console.error('Lỗi suy luận AI:', err);
+            })
+            .finally(() => {
+              isProcessing = false;
+            });
+        }
+      } else {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(
+          sourceMode === 'webcam'
+            ? 'Đang kết nối luồng Camera trực tiếp...'
+            : 'Chưa có video hoặc video đang dừng. Vui lòng chọn tệp video.',
+          w / 2,
+          h / 2
+        );
       }
 
-      // 3. Vẽ Bounding Boxes & Chấm tròn tâm heo (Yêu cầu 3 & 4)
+      // 2. Trong lúc AI đang tính (isProcessing === true), giữ nguyên khung vẽ của frame trước (activeTracksRef.current)
+      const activeTracks = activeTracksRef.current;
+
+      // 3. Vẽ Bounding Boxes, ID từng con heo & Chấm tròn tâm heo lên <canvas> trong suốt
       for (const track of activeTracks) {
         if (track.history.length > 1) {
           ctx.strokeStyle = track.crossed ? 'rgba(34, 197, 94, 0.45)' : 'rgba(6, 182, 212, 0.45)';
@@ -856,6 +836,7 @@ export default function App() {
     setForwardCount(0);
     setBackwardCount(0);
     setRecentEvents([]);
+    activeTracksRef.current = [];
     trackerRef.current?.reset();
     setStatusMsg('Đã làm mới: Số heo vừa đếm, IN qua OUT, quay ngược đã về 0');
   };
@@ -864,6 +845,7 @@ export default function App() {
     setDirection(prev => (prev === 'IN_TO_OUT' ? 'OUT_TO_IN' : 'IN_TO_OUT'));
     setForwardCount(0);
     setBackwardCount(0);
+    activeTracksRef.current = [];
     trackerRef.current?.reset();
     setStatusMsg(`Đã đổi chiều đếm sang: ${direction === 'IN_TO_OUT' ? 'Nhập Kho (OUT ➔ IN)' : 'Xuất Kho (IN ➔ OUT)'}`);
   };
@@ -872,7 +854,18 @@ export default function App() {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     try {
-      return canvas.toDataURL('image/jpeg', 0.85);
+      const snapCanvas = document.createElement('canvas');
+      snapCanvas.width = canvas.width || 640;
+      snapCanvas.height = canvas.height || 480;
+      const snapCtx = snapCanvas.getContext('2d');
+      if (!snapCtx) return canvas.toDataURL('image/jpeg', 0.85);
+
+      const activeVideo = sourceMode === 'webcam' ? webcamVideoRef.current : uploadedVideoRef.current;
+      if (activeVideo && activeVideo.readyState >= 2) {
+        snapCtx.drawImage(activeVideo, 0, 0, snapCanvas.width, snapCanvas.height);
+      }
+      snapCtx.drawImage(canvas, 0, 0, snapCanvas.width, snapCanvas.height);
+      return snapCanvas.toDataURL('image/jpeg', 0.85);
     } catch {
       return null;
     }
@@ -969,17 +962,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-100/90 via-sky-50/40 to-blue-50/30 flex flex-col font-sans select-none text-slate-800 pb-28">
-      {/* Hidden media elements */}
-      <video ref={webcamVideoRef} autoPlay playsInline muted className="hidden" />
-      <video
-        ref={uploadedVideoRef}
-        loop
-        playsInline
-        muted
-        className="hidden"
-        onPlay={() => setIsPaused(false)}
-        onPause={() => setIsPaused(true)}
-      />
+      {/* Hidden file input for video upload */}
       <input
         type="file"
         ref={fileInputRef}
@@ -1054,8 +1037,13 @@ export default function App() {
       </header>
 
       {/* MAIN VIEW BASED ON ACTIVE TAB */}
-      {activeTab === 'camera' && (
-        <main className="flex-1 p-3 md:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1720px] mx-auto w-full">
+      <main
+        className={
+          activeTab === 'camera'
+            ? 'flex-1 p-3 md:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1720px] mx-auto w-full'
+            : 'hidden'
+        }
+      >
           {/* LEFT PANE: Camera & Computer Vision Feed (7 cols on desktop) */}
           <div
             ref={containerRef}
@@ -1088,8 +1076,31 @@ export default function App() {
               </div>
             </div>
 
-            {/* Video / Canvas Viewport with Draggable Line Interaction */}
+            {/* Video / Transparent Canvas Overlay Viewport with Draggable Line Interaction */}
             <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-[400px] md:min-h-[480px]">
+              {/* Luồng hiển thị <video> gốc chạy tự nhiên 30-60 FPS */}
+              <video
+                ref={webcamVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`w-full h-full max-h-[600px] object-contain pointer-events-none ${
+                  sourceMode === 'webcam' ? 'block' : 'hidden'
+                }`}
+              />
+              <video
+                ref={uploadedVideoRef}
+                loop
+                playsInline
+                muted
+                onPlay={() => setIsPaused(false)}
+                onPause={() => setIsPaused(true)}
+                className={`w-full h-full max-h-[600px] object-contain pointer-events-none ${
+                  sourceMode === 'upload' ? 'block' : 'hidden'
+                }`}
+              />
+
+              {/* Thẻ <canvas> trong suốt đè lên trên video để vẽ bounding box, ID heo và vạch đếm */}
               <canvas
                 ref={canvasRef}
                 style={{ cursor: canvasCursor }}
@@ -1099,12 +1110,12 @@ export default function App() {
                 onTouchStart={handlePointerDown}
                 onTouchMove={handlePointerMove}
                 onTouchEnd={handlePointerUp}
-                className="w-full h-full max-h-[600px] object-contain"
+                className="absolute inset-0 w-full h-full max-h-[600px] m-auto object-contain bg-transparent z-10"
               />
 
               {lineFlash.active && (
                 <div
-                  className={`absolute inset-0 pointer-events-none transition-opacity duration-300 flex items-center justify-center ${
+                  className={`absolute inset-0 z-20 pointer-events-none transition-opacity duration-300 flex items-center justify-center ${
                     lineFlash.type === 'forward'
                       ? 'bg-emerald-500/15 border-4 border-emerald-500'
                       : 'bg-amber-500/20 border-4 border-amber-500'
@@ -1121,7 +1132,7 @@ export default function App() {
               )}
             </div>
 
-            {/* Camera Controls Dock (Yêu cầu 3: Tự động & Nạp thủ công weights1.onnx) */}
+            {/* Camera Controls Dock */}
             <div className="p-3 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1149,7 +1160,15 @@ export default function App() {
                 </button>
 
                 <button
-                  onClick={() => setIsPaused(p => !p)}
+                  onClick={() => {
+                    const nextPaused = !isPaused;
+                    setIsPaused(nextPaused);
+                    const vid = sourceMode === 'webcam' ? webcamVideoRef.current : uploadedVideoRef.current;
+                    if (vid) {
+                      if (nextPaused) vid.pause();
+                      else vid.play().catch(() => {});
+                    }
+                  }}
                   className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold rounded-xl border border-slate-700 transition-colors cursor-pointer shadow-2xs"
                   title={isPaused ? 'Tiếp tục' : 'Tạm dừng'}
                 >
@@ -1322,8 +1341,7 @@ export default function App() {
               </div>
             </div>
           </div>
-        </main>
-      )}
+      </main>
 
       {/* REPORTS TAB */}
       {activeTab === 'reports' && (
