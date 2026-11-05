@@ -233,6 +233,7 @@ export default function App() {
   // --- Real-time States (100% Real Camera & Video Feed, No Simulation) ---
   const [sourceMode, setSourceMode] = useState<'webcam' | 'upload'>('webcam');
   const [isPaused, setIsPaused] = useState(false);
+  const [isExpandedCamera, setIsExpandedCamera] = useState(false);
   const [clockString, setClockString] = useState<string>('--:--:-- | --/--/----');
 
   // --- Tally Counts ---
@@ -400,6 +401,34 @@ export default function App() {
     });
   }, [linePoints, direction, handleCrossing]);
 
+
+  // Cố định thuộc tính inline cho thẻ <video> (chống tự động văng toàn màn hình trên iOS/Android)
+  const enforceInlineVideo = useCallback((videoEl: HTMLVideoElement | null) => {
+    if (!videoEl) return;
+    videoEl.autoplay = true;
+    videoEl.playsInline = true;
+    videoEl.muted = true;
+    videoEl.controls = false;
+    videoEl.setAttribute('autoplay', '');
+    videoEl.setAttribute('playsinline', 'true');
+    videoEl.setAttribute('webkit-playsinline', 'true');
+    videoEl.setAttribute('x5-playsinline', 'true');
+    videoEl.setAttribute('x5-video-player-type', 'h5');
+    videoEl.setAttribute('muted', '');
+  }, []);
+
+  // Đảm bảo thẻ <video> không bị đơ hình khi chuyển đổi khung nhìn / tab
+  useEffect(() => {
+    enforceInlineVideo(webcamVideoRef.current);
+    enforceInlineVideo(uploadedVideoRef.current);
+
+    if (activeTab === 'camera' && !isPaused) {
+      const activeVid = sourceMode === 'webcam' ? webcamVideoRef.current : uploadedVideoRef.current;
+      if (activeVid && activeVid.paused && (activeVid.srcObject || activeVid.src)) {
+        activeVid.play().catch(() => {});
+      }
+    }
+  }, [activeTab, sourceMode, isPaused, enforceInlineVideo]);
 
   // Clean up media streams
   useEffect(() => {
@@ -798,15 +827,20 @@ export default function App() {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(t => t.stop());
       }
+      if (uploadedVideoRef.current && !uploadedVideoRef.current.paused) {
+        uploadedVideoRef.current.pause();
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'environment' },
         audio: false,
       });
       streamRef.current = stream;
       if (webcamVideoRef.current) {
+        enforceInlineVideo(webcamVideoRef.current);
         webcamVideoRef.current.srcObject = stream;
         await webcamVideoRef.current.play();
       }
+      activeTracksRef.current = [];
       setSourceMode('webcam');
       setIsPaused(false);
       setStatusMsg('Đang nhận diện qua luồng Camera trực tiếp (Chỉ nhận diện heo)');
@@ -822,9 +856,11 @@ export default function App() {
     if (file) {
       const url = URL.createObjectURL(file);
       if (uploadedVideoRef.current) {
+        enforceInlineVideo(uploadedVideoRef.current);
         uploadedVideoRef.current.src = url;
-        uploadedVideoRef.current.play();
+        uploadedVideoRef.current.play().catch(() => {});
       }
+      activeTracksRef.current = [];
       setSourceMode('upload');
       setIsPaused(false);
       setStatusMsg(`Đang phát video tệp: ${file.name}`);
@@ -939,11 +975,8 @@ export default function App() {
 
 
   const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
+    // Mở rộng / thu gọn khung camera ngay bên trong giao diện (không gọi fullscreen trình duyệt để chống văng màn hình)
+    setIsExpandedCamera(prev => !prev);
   };
 
   // --- RENDER LOGIN SCREEN IF NOT AUTHENTICATED ---
@@ -1041,13 +1074,15 @@ export default function App() {
         className={
           activeTab === 'camera'
             ? 'flex-1 p-3 md:p-5 grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-[1720px] mx-auto w-full'
-            : 'hidden'
+            : 'fixed -left-[9999px] top-0 w-[640px] h-[480px] opacity-0 pointer-events-none overflow-hidden'
         }
       >
-          {/* LEFT PANE: Camera & Computer Vision Feed (7 cols on desktop) */}
+          {/* LEFT PANE: Camera & Computer Vision Feed */}
           <div
             ref={containerRef}
-            className="lg:col-span-7 xl:col-span-7 bg-white/70 backdrop-blur-xl rounded-3xl overflow-hidden shadow-[0_12px_36px_rgba(15,23,42,0.06)] border border-white/90 ring-1 ring-slate-200/50 flex flex-col justify-between"
+            className={`${
+              isExpandedCamera ? 'lg:col-span-12 xl:col-span-12' : 'lg:col-span-7 xl:col-span-7'
+            } bg-white/70 backdrop-blur-xl rounded-3xl overflow-hidden shadow-[0_12px_36px_rgba(15,23,42,0.06)] border border-white/90 ring-1 ring-slate-200/50 flex flex-col justify-between`}
           >
             {/* Top Video Header Bar */}
             <div className="px-4 py-2.5 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 flex items-center justify-between text-xs text-slate-200">
@@ -1069,67 +1104,74 @@ export default function App() {
                 <button
                   onClick={toggleFullscreen}
                   className="p-1 hover:text-white text-slate-400 transition-colors cursor-pointer"
-                  title="Toàn màn hình camera"
+                  title={isExpandedCamera ? 'Thu gọn khung camera' : 'Mở rộng khung camera trong trang'}
                 >
                   <Maximize2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
 
-            {/* Video / Transparent Canvas Overlay Viewport with Draggable Line Interaction */}
-            <div className="relative flex-1 bg-black flex items-center justify-center overflow-hidden min-h-[400px] md:min-h-[480px]">
-              {/* Luồng hiển thị <video> gốc chạy tự nhiên 30-60 FPS */}
-              <video
-                ref={webcamVideoRef}
-                autoPlay
-                playsInline
-                muted
-                className={`w-full h-full max-h-[600px] object-contain pointer-events-none ${
-                  sourceMode === 'webcam' ? 'block' : 'hidden'
-                }`}
-              />
-              <video
-                ref={uploadedVideoRef}
-                loop
-                playsInline
-                muted
-                onPlay={() => setIsPaused(false)}
-                onPause={() => setIsPaused(true)}
-                className={`w-full h-full max-h-[600px] object-contain pointer-events-none ${
-                  sourceMode === 'upload' ? 'block' : 'hidden'
-                }`}
-              />
-
-              {/* Thẻ <canvas> trong suốt đè lên trên video để vẽ bounding box, ID heo và vạch đếm */}
-              <canvas
-                ref={canvasRef}
-                style={{ cursor: canvasCursor }}
-                onMouseDown={handlePointerDown}
-                onMouseMove={handlePointerMove}
-                onMouseUp={handlePointerUp}
-                onTouchStart={handlePointerDown}
-                onTouchMove={handlePointerMove}
-                onTouchEnd={handlePointerUp}
-                className="absolute inset-0 w-full h-full max-h-[600px] m-auto object-contain bg-transparent z-10"
-              />
-
-              {lineFlash.active && (
-                <div
-                  className={`absolute inset-0 z-20 pointer-events-none transition-opacity duration-300 flex items-center justify-center ${
-                    lineFlash.type === 'forward'
-                      ? 'bg-emerald-500/15 border-4 border-emerald-500'
-                      : 'bg-amber-500/20 border-4 border-amber-500'
+            {/* Khung chứa cố định (Container) giữ <video> và <canvas> gọn gàng bên trong, chống văng toàn màn hình */}
+            <div className="relative w-full bg-slate-950 flex items-center justify-center overflow-hidden p-0">
+              <div className="relative w-full aspect-[4/3] max-h-[480px] bg-black overflow-hidden flex items-center justify-center mx-auto">
+                {/* Luồng hiển thị <video> gốc chạy tự nhiên 30-60 FPS, cố định autoplay + playsinline + muted */}
+                <video
+                  ref={webcamVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  disablePictureInPicture
+                  controls={false}
+                  className={`absolute inset-0 w-full h-full object-contain pointer-events-none select-none ${
+                    sourceMode === 'webcam' ? 'opacity-100 z-0' : 'opacity-0 -z-10'
                   }`}
-                >
+                />
+                <video
+                  ref={uploadedVideoRef}
+                  autoPlay
+                  loop
+                  playsInline
+                  muted
+                  disablePictureInPicture
+                  controls={false}
+                  onPlay={() => setIsPaused(false)}
+                  onPause={() => setIsPaused(true)}
+                  className={`absolute inset-0 w-full h-full object-contain pointer-events-none select-none ${
+                    sourceMode === 'upload' ? 'opacity-100 z-0' : 'opacity-0 -z-10'
+                  }`}
+                />
+
+                {/* Thẻ <canvas> trong suốt đè khít lên trên video bên trong container */}
+                <canvas
+                  ref={canvasRef}
+                  style={{ cursor: canvasCursor }}
+                  onMouseDown={handlePointerDown}
+                  onMouseMove={handlePointerMove}
+                  onMouseUp={handlePointerUp}
+                  onTouchStart={handlePointerDown}
+                  onTouchMove={handlePointerMove}
+                  onTouchEnd={handlePointerUp}
+                  className="absolute inset-0 w-full h-full object-contain bg-transparent z-10 touch-none"
+                />
+
+                {lineFlash.active && (
                   <div
-                    className={`px-4 py-1.5 rounded-xl font-black text-sm uppercase tracking-wider text-white shadow-xl backdrop-blur-xs ${
-                      lineFlash.type === 'forward' ? 'bg-emerald-600' : 'bg-amber-600'
+                    className={`absolute inset-0 z-20 pointer-events-none transition-opacity duration-300 flex items-center justify-center ${
+                      lineFlash.type === 'forward'
+                        ? 'bg-emerald-500/15 border-4 border-emerald-500'
+                        : 'bg-amber-500/20 border-4 border-amber-500'
                     }`}
                   >
-                    {lineFlash.type === 'forward' ? '+1 HEO QUA VẠCH' : '-1 HEO QUAY ĐẦU'}
+                    <div
+                      className={`px-4 py-1.5 rounded-xl font-black text-sm uppercase tracking-wider text-white shadow-xl backdrop-blur-xs ${
+                        lineFlash.type === 'forward' ? 'bg-emerald-600' : 'bg-amber-600'
+                      }`}
+                    >
+                      {lineFlash.type === 'forward' ? '+1 HEO QUA VẠCH' : '-1 HEO QUAY ĐẦU'}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* Camera Controls Dock */}
