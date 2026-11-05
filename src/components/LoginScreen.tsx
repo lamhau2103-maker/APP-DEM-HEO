@@ -26,7 +26,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [adminPassword, setAdminPassword] = useState('');
   const [adminError, setAdminError] = useState<string | null>(null);
 
-  // Handle standard user login
+  // Helper lấy tên hiển thị mặc định từ Email nếu người dùng để trống Tên
+  const getDisplayName = (email: string, rawName: string, approvedName?: string): string => {
+    const trimmed = rawName.trim();
+    if (trimmed) return trimmed;
+    if (approvedName && approvedName.trim()) return approvedName.trim();
+    if (email.includes('@')) {
+      const prefix = email.split('@')[0].trim();
+      if (prefix) return prefix;
+    }
+    return 'Nhân viên';
+  };
+
+  // Handle standard user login (Tên người dùng KHÔNG bắt buộc)
   const handleUserLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setUserError(null);
@@ -39,16 +51,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       setUserError('Vui lòng nhập Email người dùng.');
       return;
     }
-    if (!nameTrim) {
-      setUserError('Vui lòng nhập Tên người dùng.');
-      return;
-    }
 
     const foundApproved = approvedUsers.find(u => u.email.toLowerCase() === emailTrim);
     if (foundApproved) {
+      const finalName = nameTrim || (emailTrim.includes('@') ? emailTrim.split('@')[0] : '') || foundApproved.name || 'Nhân viên';
       onLogin({
         email: emailTrim,
-        name: nameTrim || foundApproved.name,
+        name: finalName,
         role: 'user',
       });
       return;
@@ -62,7 +71,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
   };
 
-  // Handle sending approval request
+  // Handle sending approval request (Tên người dùng KHÔNG bắt buộc)
   const handleSendRequest = () => {
     setUserError(null);
     setUserSuccess(null);
@@ -74,10 +83,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       setUserError('Vui lòng nhập Email người dùng trước khi gửi yêu cầu duyệt.');
       return;
     }
-    if (!nameTrim) {
-      setUserError('Vui lòng nhập Tên người dùng trước khi gửi yêu cầu duyệt.');
-      return;
-    }
 
     const isAlreadyApproved = approvedUsers.some(u => u.email.toLowerCase() === emailTrim);
     if (isAlreadyApproved) {
@@ -85,9 +90,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    const success = onRequestApproval(emailTrim, nameTrim);
+    const finalName = getDisplayName(emailTrim, nameTrim);
+    const success = onRequestApproval(emailTrim, finalName);
     if (success) {
-      setUserSuccess(`Đã gửi yêu cầu phê duyệt cho "${emailTrim}" thành công! Vui lòng chờ Admin phê duyệt.`);
+      setUserSuccess(`Đã gửi yêu cầu phê duyệt cho "${emailTrim}" (${finalName}) thành công! Vui lòng chờ Admin phê duyệt.`);
     } else {
       setUserError('Email này đã có trong danh sách chờ duyệt trước đó. Vui lòng chờ Admin kích hoạt.');
     }
@@ -165,7 +171,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
               <div>
                 <label className="text-[11px] font-bold text-slate-700 block mb-1">
-                  HỌ VÀ TÊN NGƯỜI DÙNG:
+                  HỌ VÀ TÊN NGƯỜI DÙNG <span className="text-slate-400 font-normal">(Không bắt buộc)</span>:
                 </label>
                 <div className="relative">
                   <User className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
@@ -173,7 +179,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     type="text"
                     value={userName}
                     onChange={e => setUserName(e.target.value)}
-                    placeholder="Nhập họ và tên người sử dụng..."
+                    placeholder="Nhập họ tên (để trống sẽ tự lấy tên theo Email)..."
                     className="w-full pl-9 pr-3 py-2.5 bg-white/80 border border-slate-200 rounded-2xl text-xs font-medium focus:bg-white focus:border-sky-500 focus:ring-2 focus:ring-sky-100 shadow-2xs outline-none transition-all"
                   />
                 </div>

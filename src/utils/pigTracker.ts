@@ -86,12 +86,18 @@ export class PigTracker {
     const matchedDetectionIndices = new Set<number>();
     const matchedTrackIds = new Set<number>();
 
-    // 1. Associate detections with existing tracks
+    // 1. Associate detections with existing tracks (Centroid + IoU hybrid matching & coordinate smoothing)
     const existingTracks = Array.from(this.tracks.values());
+    const smoothAlpha = 0.65; // Hệ số làm mượt tọa độ giúp khung bám sát từng con heo không bị nhấp nháy
 
     for (const track of existingTracks) {
-      let bestDist = Infinity;
+      let bestScore = Infinity;
       let bestIndex = -1;
+
+      const trackLeft = track.x - track.width / 2;
+      const trackTop = track.y - track.height / 2;
+      const trackRight = trackLeft + track.width;
+      const trackBottom = trackTop + track.height;
 
       for (let i = 0; i < detections.length; i++) {
         if (matchedDetectionIndices.has(i)) continue;
@@ -100,9 +106,23 @@ export class PigTracker {
         const detCenterY = det.y + det.height / 2;
 
         const dist = Math.hypot(detCenterX - track.x, detCenterY - track.y);
-        if (dist < bestDist && dist < maxDist) {
-          bestDist = dist;
-          bestIndex = i;
+
+        // Compute IoU between existing track box and detection box
+        const interX1 = Math.max(trackLeft, det.x);
+        const interY1 = Math.max(trackTop, det.y);
+        const interX2 = Math.min(trackRight, det.x + det.width);
+        const interY2 = Math.min(trackBottom, det.y + det.height);
+        const interArea = Math.max(0, interX2 - interX1) * Math.max(0, interY2 - interY1);
+        const unionArea = track.width * track.height + det.width * det.height - interArea;
+        const iou = unionArea > 0 ? interArea / unionArea : 0;
+
+        // Match if within centroid distance OR overlapping IoU >= 0.2
+        if (dist < maxDist || iou >= 0.2) {
+          const score = dist * (1 - iou * 0.5);
+          if (score < bestScore) {
+            bestScore = score;
+            bestIndex = i;
+          }
         }
       }
 
@@ -111,8 +131,14 @@ export class PigTracker {
         matchedTrackIds.add(track.id);
 
         const det = detections[bestIndex];
-        const newX = det.x + det.width / 2;
-        const newY = det.y + det.height / 2;
+        const rawX = det.x + det.width / 2;
+        const rawY = det.y + det.height / 2;
+
+        // Làm mượt tọa độ (smoothing) để khung bám sát heo mượt mà
+        const newX = track.x + smoothAlpha * (rawX - track.x);
+        const newY = track.y + smoothAlpha * (rawY - track.y);
+        const newW = track.width + smoothAlpha * (det.width - track.width);
+        const newH = track.height + smoothAlpha * (det.height - track.height);
 
         const prevPoint: Point2D = { x: track.x, y: track.y };
         const currPoint: Point2D = { x: newX, y: newY };
@@ -122,8 +148,8 @@ export class PigTracker {
         track.speed = Math.hypot(track.vx, track.vy);
         track.x = newX;
         track.y = newY;
-        track.width = det.width;
-        track.height = det.height;
+        track.width = newW;
+        track.height = newH;
         track.confidence = det.confidence;
         track.lastSeen = Date.now();
 
@@ -134,29 +160,25 @@ export class PigTracker {
 
         this.missedFrames.delete(track.id);
 
-        // 2. Evaluate Arbitrary 2-Point Line Crossing
+        // 2. Evaluate Arbitrary 2-Point Line Crossing (Mỗi ID chỉ đếm 1 lần qua vạch, chống đếm trùng)
         if (!track.crossed) {
-          // Check if segment (prevPoint -> currPoint) intersects LineZone (lineA -> lineB)
-          const intersects = segmentsIntersect(lineA, lineB, prevPoint, currPoint);
+          const prevStart = track.history.length >= 2 ? track.history[track.history.length - 2] : prevPoint;
+          const intersects =
+            segmentsIntersect(lineA, lineB, prevPoint, currPoint) ||
+            segmentsIntersect(lineA, lineB, prevStart, currPoint);
 
           if (intersects) {
-            // Determine side / direction using cross product of line vector with motion vector
-            // lineVector = lineB - lineA
-            // motionVector = currPoint - prevPoint
             const lineDx = lineB.x - lineA.x;
             const lineDy = lineB.y - lineA.y;
-            const moveDx = currPoint.x - prevPoint.x;
-            const moveDy = currPoint.y - prevPoint.y;
+            const moveDx = currPoint.x - prevStart.x;
+            const moveDy = currPoint.y - prevStart.y;
 
-            // 2D cross product: lineDx * moveDy - lineDy * moveDx
             const crossProduct = lineDx * moveDy - lineDy * moveDx;
 
             let crossingDir: CountDirection;
             if (!this.options.isFlipped) {
-              // Normal direction: crossProduct > 0 is Forward (IN_TO_OUT)
               crossingDir = crossProduct >= 0 ? 'IN_TO_OUT' : 'OUT_TO_IN';
             } else {
-              // Flipped direction: inverted
               crossingDir = crossProduct <= 0 ? 'IN_TO_OUT' : 'OUT_TO_IN';
             }
 

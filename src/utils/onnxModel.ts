@@ -9,8 +9,78 @@ export interface ModelStatusInfo {
   modelName: string;
 }
 
-export const GITHUB_MODEL_URL =
-  'https://github.com/lamhau2103-maker/APP-DEM-HEO/releases/download/v1.0.0/weights1.onnx';
+export const DEFAULT_MODEL_URL = '/weights1.onnx';
+
+const IDB_NAME = 'pig_counter_onnx_cache_v1';
+const IDB_STORE = 'models';
+
+function getCachedModelBuffer(key: string): Promise<ArrayBuffer | null> {
+  return new Promise(resolve => {
+    if (typeof indexedDB === 'undefined') {
+      resolve(null);
+      return;
+    }
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => {
+        try {
+          const db = req.result;
+          const tx = db.transaction(IDB_STORE, 'readonly');
+          const store = tx.objectStore(IDB_STORE);
+          const getReq = store.get(key);
+          getReq.onsuccess = () => {
+            resolve(getReq.result instanceof ArrayBuffer ? getReq.result : null);
+          };
+          getReq.onerror = () => resolve(null);
+        } catch {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function setCachedModelBuffer(key: string, buffer: ArrayBuffer): Promise<void> {
+  return new Promise(resolve => {
+    if (typeof indexedDB === 'undefined') {
+      resolve();
+      return;
+    }
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = () => {
+        try {
+          const db = req.result;
+          const tx = db.transaction(IDB_STORE, 'readwrite');
+          const store = tx.objectStore(IDB_STORE);
+          store.put(buffer, key);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => resolve();
+        } catch {
+          resolve();
+        }
+      };
+      req.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
 
 export class OnnxPigDetector {
   private session: any = null;
@@ -22,16 +92,24 @@ export class OnnxPigDetector {
   private inputHeight = 640;
   private preCanvas: HTMLCanvasElement | null = null;
   private preCtx: CanvasRenderingContext2D | null = null;
+  private float32Data: Float32Array = new Float32Array(3 * 640 * 640);
 
   constructor() {
-    this.initPreCanvas();
-    // Tự động tìm và nạp file /weights1.onnx khi ứng dụng khởi chạy (Yêu cầu 3)
+    this.initPreCanvas(640, 640);
+    // Tự động tìm và nạp file /weights1.onnx khi ứng dụng khởi chạy
     this.autoLoadModel();
   }
 
-  private initPreCanvas() {
+  private initPreCanvas(w = 640, h = 640) {
+    this.inputWidth = w;
+    this.inputHeight = h;
+    if (this.float32Data.length !== 3 * w * h) {
+      this.float32Data = new Float32Array(3 * w * h);
+    }
     if (typeof document !== 'undefined') {
-      this.preCanvas = document.createElement('canvas');
+      if (!this.preCanvas) {
+        this.preCanvas = document.createElement('canvas');
+      }
       this.preCanvas.width = this.inputWidth;
       this.preCanvas.height = this.inputHeight;
       this.preCtx = this.preCanvas.getContext('2d', { willReadFrequently: true });
@@ -40,7 +118,6 @@ export class OnnxPigDetector {
 
   /**
    * Truy cập thư viện ONNX Runtime Web được nhúng qua CDN trong index.html
-   * window.ort từ https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js
    */
   private getOrt(): any {
     if (typeof window !== 'undefined' && (window as any).ort) {
@@ -59,13 +136,49 @@ export class OnnxPigDetector {
   }
 
   /**
-   * Tự động liên kết và nạp file weights1.onnx trực tiếp từ GitHub Release của người dùng
+   * Cấu hình môi trường WASM chuẩn của ONNX Runtime Web
    */
-  public async autoLoadModel(url = GITHUB_MODEL_URL): Promise<boolean> {
+  private configureOrtEnv(ort: any) {
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+    const canUseThreads =
+      typeof crossOriginIsolated !== 'undefined' &&
+      crossOriginIsolated &&
+      typeof navigator !== 'undefined' &&
+      navigator.hardwareConcurrency;
+    ort.env.wasm.numThreads = canUseThreads ? Math.min(4, navigator.hardwareConcurrency) : 1;
+    ort.env.wasm.simd = true;
+    ort.env.wasm.proxy = false;
+  }
+
+  /**
+   * Đồng bộ kích thước input thực tế từ session.inputMetadata (thường là 640x640 hoặc 416x416)
+   */
+  private syncInputDimensionsFromSession() {
+    try {
+      if (!this.session) return;
+      const meta = this.session.inputMetadata;
+      const inputName = this.session.inputNames?.[0];
+      const info = meta && inputName ? meta[inputName] : Array.isArray(meta) ? meta[0] : null;
+      const dims = info?.dimensions || info?.shape;
+      if (Array.isArray(dims) && dims.length === 4) {
+        const h = Number(dims[2]);
+        const w = Number(dims[3]);
+        if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+          this.initPreCanvas(w, h);
+        }
+      }
+    } catch {
+      // Giữ mặc định 640x640
+    }
+  }
+
+  /**
+   * Tự động nạp trực tiếp mô hình từ "/weights1.onnx" kèm lưu cache IndexedDB
+   */
+  public async autoLoadModel(url = DEFAULT_MODEL_URL): Promise<boolean> {
     const ort = this.getOrt();
     if (!ort) {
-      // Đợi thêm một nhịp nếu CDN đang tải
-      setTimeout(() => this.autoLoadModel(url), 500);
+      setTimeout(() => this.autoLoadModel(url), 400);
       return false;
     }
 
@@ -73,69 +186,54 @@ export class OnnxPigDetector {
       this.status = 'loading';
       this.statusMessage = 'Đang kết nối mô hình AI...';
 
-      // Cấu hình CDN WASM v1.18.0 chuẩn, tắt multi-threads để tránh lỗi SharedArrayBuffer
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-      ort.env.wasm.numThreads = 1;
-      ort.env.wasm.simd = true;
-      ort.env.wasm.proxy = false;
+      this.configureOrtEnv(ort);
 
-      // 1. Tải file dưới dạng ArrayBuffer từ GitHub Release
-      let buffer: ArrayBuffer | null = null;
-      try {
-        const resp = await fetch(url);
-        if (resp.ok) {
-          buffer = await resp.arrayBuffer();
-        }
-      } catch (err) {
-        console.warn('Direct GitHub fetch CORS blocked, using local/proxy fallback:', err);
-      }
+      // 1. Kiểm tra cache IndexedDB để nạp tức thì cho các lần mở sau
+      let buffer = await getCachedModelBuffer(url);
 
-      // Fallback 1: Thử nạp từ file cục bộ /weights1.onnx
+      // 2. Nếu chưa có trong IndexedDB, tải từ "/weights1.onnx"
       if (!buffer) {
         try {
-          const localResp = await fetch('/weights1.onnx');
-          if (localResp.ok) {
-            buffer = await localResp.arrayBuffer();
+          const resp = await fetch(url);
+          if (resp.ok) {
+            buffer = await resp.arrayBuffer();
           }
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
 
-      // Fallback 2: Thử nạp qua proxy server /api/model-proxy
+      // Fallback qua proxy nội bộ nếu cần
       if (!buffer) {
         try {
           const proxyResp = await fetch('/api/model-proxy');
           if (proxyResp.ok) {
             buffer = await proxyResp.arrayBuffer();
           }
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
 
       if (!buffer) {
-        throw new Error('Không thể tải tệp weights1.onnx từ GitHub Release');
+        throw new Error('Không thể tải tệp /weights1.onnx');
       }
 
-      // 2. Tạo session từ mảng Uint8Array(buffer) theo đúng yêu cầu
+      // Lưu cache ArrayBuffer vào IndexedDB cho lần truy cập tiếp theo
+      setCachedModelBuffer(url, buffer).catch(() => {});
+
       const modelBytes = new Uint8Array(buffer);
-      try {
-        this.session = await ort.InferenceSession.create(modelBytes, {
-          executionProviders: ['webgl', 'wasm'],
-        });
-      } catch {
-        // Fallback tăng cường sang WASM nếu trình duyệt chưa bật WebGL
-        this.session = await ort.InferenceSession.create(modelBytes, {
-          executionProviders: ['wasm'],
-        });
-      }
+      // Dùng executionProviders: ['wasm'] để tương thích tuyệt đối với mọi trình duyệt và mô hình nén INT8
+      this.session = await ort.InferenceSession.create(modelBytes, {
+        executionProviders: ['wasm'],
+      });
 
       if (this.session) {
+        this.syncInputDimensionsFromSession();
         this.isLoaded = true;
         this.status = 'loaded';
-        this.modelName = 'weights1.onnx (GitHub Release)';
-        this.statusMessage = 'Mô hình AI: Sẵn sàng';
+        this.modelName = 'weights1.onnx';
+        this.statusMessage = 'Đã kết nối mô hình AI (Sẵn sàng)';
         return true;
       }
 
@@ -150,14 +248,14 @@ export class OnnxPigDetector {
   }
 
   /**
-   * Nạp tệp từ URL bất kỳ (mặc định là GitHub Release)
+   * Nạp tệp từ URL bất kỳ (mặc định là "/weights1.onnx")
    */
-  public async loadModelFromUrl(url = GITHUB_MODEL_URL): Promise<boolean> {
+  public async loadModelFromUrl(url = DEFAULT_MODEL_URL): Promise<boolean> {
     return this.autoLoadModel(url);
   }
 
   /**
-   * Nạp thủ công tệp weights1.onnx do người dùng chọn từ máy
+   * Nạp thủ công tệp weights1.onnx từ ArrayBuffer
    */
   public async loadModelFromBuffer(buffer: ArrayBuffer, fileName = 'weights1.onnx'): Promise<boolean> {
     const ort = this.getOrt();
@@ -170,27 +268,20 @@ export class OnnxPigDetector {
       this.status = 'loading';
       this.statusMessage = `Đang nạp ${fileName}...`;
 
-      ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-      ort.env.wasm.numThreads = 1;
-      ort.env.wasm.simd = true;
-      ort.env.wasm.proxy = false;
+      this.configureOrtEnv(ort);
 
       const modelBytes = new Uint8Array(buffer);
+      this.session = await ort.InferenceSession.create(modelBytes, {
+        executionProviders: ['wasm'],
+      });
 
-      try {
-        this.session = await ort.InferenceSession.create(modelBytes, {
-          executionProviders: ['webgl', 'wasm'],
-        });
-      } catch {
-        this.session = await ort.InferenceSession.create(modelBytes, {
-          executionProviders: ['wasm'],
-        });
-      }
+      this.syncInputDimensionsFromSession();
+      setCachedModelBuffer(DEFAULT_MODEL_URL, buffer).catch(() => {});
 
       this.isLoaded = true;
       this.status = 'loaded';
       this.modelName = fileName;
-      this.statusMessage = `Đã kết nối weights1.onnx (${fileName})`;
+      this.statusMessage = 'Đã kết nối mô hình AI (Sẵn sàng)';
       return true;
     } catch (err: unknown) {
       this.isLoaded = false;
@@ -202,69 +293,60 @@ export class OnnxPigDetector {
   }
 
   /**
-   * TIỀN XỬ LÝ (PRE-PROCESSING CHUẨN YOLOv8 - Yêu cầu 4)
-   * - Vẽ khung hình qua thẻ canvas ẩn 640x640
-   * - Lấy pixel data từ ctx.getImageData(0, 0, 640, 640).data
-   * - Đóng gói mảng Float32Array 1 * 3 * 640 * 640 Planar RGB (NCHW)
-   * - Trả về ort.Tensor
+   * TIỀN XỬ LÝ (PRE-PROCESSING CHUẨN YOLOv8 & TỐI ƯU BỘ NHỚ)
+   * - Tái sử dụng duy nhất 1 canvas ẩn và 1 mảng Float32Array cho mọi frame để không gây tràn RAM hay nóng máy
    */
-  private preprocess(sourceCanvas: HTMLCanvasElement): any {
+  private preprocess(source: HTMLCanvasElement | HTMLVideoElement): any {
     const ort = this.getOrt();
     if (!this.preCanvas || !this.preCtx || !ort) return null;
 
-    // Vẽ qua canvas ẩn 640x640
-    this.preCtx.drawImage(sourceCanvas, 0, 0, this.inputWidth, this.inputHeight);
+    this.preCtx.drawImage(source, 0, 0, this.inputWidth, this.inputHeight);
     const imgData = this.preCtx.getImageData(0, 0, this.inputWidth, this.inputHeight).data;
 
-    // Thứ tự kênh màu Planar RGB (NCHW): toàn bộ kênh R, rồi G, rồi B (chia cho 255.0)
-    const float32Data = new Float32Array(3 * this.inputWidth * this.inputHeight);
+    const float32Data = this.float32Data;
     const imageArea = this.inputWidth * this.inputHeight;
 
     for (let i = 0; i < imageArea; i++) {
-      float32Data[i] = imgData[i * 4] / 255.0; // Kênh R
-      float32Data[i + imageArea] = imgData[i * 4 + 1] / 255.0; // Kênh G
-      float32Data[i + 2 * imageArea] = imgData[i * 4 + 2] / 255.0; // Kênh B
+      const idx = i * 4;
+      float32Data[i] = imgData[idx] / 255.0; // Kênh R
+      float32Data[i + imageArea] = imgData[idx + 1] / 255.0; // Kênh G
+      float32Data[i + 2 * imageArea] = imgData[idx + 2] / 255.0; // Kênh B
     }
 
     return new ort.Tensor('float32', float32Data, [1, 3, this.inputHeight, this.inputWidth]);
   }
 
   /**
-   * HẬU XỬ LÝ (POST-PROCESSING) & NON-MAXIMUM SUPPRESSION (NMS - Yêu cầu 5)
-   * - Đầu vào: sourceCanvas (kích thước thực) và confidenceThreshold (mặc định 0.45)
-   * - Hỗ trợ các shape: [1, 4 + num_classes, 8400] và [1, 8400, 4 + num_classes]
-   * - Chỉ giữ dự đoán có confidence >= 0.45 và classId === 0 (Heo)
-   * - Áp dụng NMS với iouThreshold = 0.45
-   * - Quy đổi tọa độ (x1, y1, x2, y2) về kích thước hiển thị thực tế
+   * HẬU XỬ LÝ (POST-PROCESSING) & NON-MAXIMUM SUPPRESSION (NMS, IoU = 0.45)
    */
   public async detectPigs(
-    sourceCanvas: HTMLCanvasElement,
-    confidenceThreshold = 0.45
+    source: HTMLCanvasElement | HTMLVideoElement,
+    confidenceThreshold = 0.25,
+    displayWidth = 640,
+    displayHeight = 480
   ): Promise<DetectionBox[]> {
-    // Yêu cầu 1: Nếu mô hình ONNX chưa nạp xong, tuyệt đối không trả về kết quả giả
     if (!this.session || !this.isLoaded) {
       return [];
     }
 
     try {
-      const tensor = this.preprocess(sourceCanvas);
+      const tensor = this.preprocess(source);
       if (!tensor) return [];
 
       const inputName = this.session.inputNames[0] || 'images';
       const feeds = { [inputName]: tensor };
 
-      // Chạy suy luận trực tiếp 100% bằng ONNX Runtime
       const results = await this.session.run(feeds);
       const outputName = this.session.outputNames[0];
       const outputTensor = results[outputName];
       if (!outputTensor) return [];
 
       const data = outputTensor.data as Float32Array;
-      const dims = outputTensor.dims; // e.g. [1, 5, 8400] hoặc [1, 8400, 5] hoặc [1, N, 6]
+      const dims = outputTensor.dims;
 
       const boxes: DetectionBox[] = [];
-      const origW = sourceCanvas.width;
-      const origH = sourceCanvas.height;
+      const origW = displayWidth || (source instanceof HTMLVideoElement ? source.videoWidth || 640 : source.width);
+      const origH = displayHeight || (source instanceof HTMLVideoElement ? source.videoHeight || 480 : source.height);
       const scaleX = origW / this.inputWidth;
       const scaleY = origH / this.inputHeight;
 

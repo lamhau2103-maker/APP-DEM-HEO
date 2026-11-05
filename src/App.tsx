@@ -145,6 +145,17 @@ export default function App() {
     setActiveTab('camera');
   };
 
+  const resolveUserName = (email: string, rawName?: string): string => {
+    const trimmed = (rawName || '').trim();
+    if (trimmed) return trimmed;
+    const emailTrim = (email || '').trim();
+    if (emailTrim.includes('@')) {
+      const prefix = emailTrim.split('@')[0].trim();
+      if (prefix) return prefix;
+    }
+    return 'Nhân viên';
+  };
+
   const handleRequestApproval = (email: string, name: string): boolean => {
     const emailLower = email.toLowerCase().trim();
     if (pendingApprovals.some(p => p.email.toLowerCase() === emailLower)) {
@@ -153,7 +164,7 @@ export default function App() {
     const newPending: PendingApproval = {
       id: `req-${Date.now()}`,
       email: emailLower,
-      name: name.trim(),
+      name: resolveUserName(emailLower, name),
       requestedAt: new Date().toLocaleTimeString('vi-VN') + ' ' + new Date().toLocaleDateString('vi-VN'),
     };
     setPendingApprovals(prev => [newPending, ...prev]);
@@ -167,7 +178,7 @@ export default function App() {
     }
     const newUser: ApprovedUser = {
       email: emailLower,
-      name: name.trim(),
+      name: resolveUserName(emailLower, name),
       approvedAt: new Date().toLocaleDateString('vi-VN'),
     };
     setApprovedUsers(prev => [newUser, ...prev]);
@@ -213,7 +224,7 @@ export default function App() {
   const animFrameIdRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // --- Model Management State (Yêu cầu 3) ---
+  // --- Model Management State ---
   const [modelStatus, setModelStatus] = useState<ModelStatusInfo>(() =>
     onnxDetectorRef.current.getStatus()
   );
@@ -228,7 +239,7 @@ export default function App() {
   const [backwardCount, setBackwardCount] = useState(0);
   const [direction, setDirection] = useState<CountDirection>('IN_TO_OUT');
   const [countMode, setCountMode] = useState<'net' | 'gross'>('net');
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.45);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.25);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [isCountingPaused, setIsCountingPaused] = useState(false);
 
@@ -259,7 +270,7 @@ export default function App() {
   });
 
   const [recentEvents, setRecentEvents] = useState<CrossingEvent[]>([]);
-  const [statusMsg, setStatusMsg] = useState('Hệ thống AI YOLOv8 weights1.onnx sẵn sàng');
+  const [statusMsg, setStatusMsg] = useState('Đã kết nối mô hình AI (Sẵn sàng)');
   const [fps, setFps] = useState(30);
 
   // Modals
@@ -293,15 +304,15 @@ export default function App() {
     }
   }, [linePoints]);
 
-  // Tự động tải ngầm mô hình weights1.onnx từ GitHub Release (Yêu cầu 1)
+  // Tự động nạp trực tiếp mô hình "/weights1.onnx" kèm IndexedDB cache
   useEffect(() => {
     setStatusMsg('Đang kết nối mô hình AI...');
     onnxDetectorRef.current
-      .autoLoadModel()
+      .autoLoadModel('/weights1.onnx')
       .then(loaded => {
         setModelStatus(onnxDetectorRef.current.getStatus());
         if (loaded) {
-          setStatusMsg('Mô hình AI: Sẵn sàng nhận diện heo');
+          setStatusMsg('Đã kết nối mô hình AI (Sẵn sàng)');
         } else {
           setStatusMsg('Đang kết nối lại mô hình AI...');
         }
@@ -413,12 +424,10 @@ export default function App() {
     let lastTime = performance.now();
     let frameCount = 0;
     let lastFpsUpdate = performance.now();
-    let isInferencing = false;
-    let lastInferTime = 0;
-    const INFER_INTERVAL_MS = 80; // Giới hạn AI 10 - 15 FPS (80ms/lần) loại bỏ hoàn toàn giật lag
+    let isProcessing = false;
     let cachedDetections: DetectionBox[] = [];
 
-    const loop = async () => {
+    const loop = () => {
       const canvas = canvasRef.current;
       if (!canvas) {
         animFrameIdRef.current = requestAnimationFrame(loop);
@@ -438,7 +447,6 @@ export default function App() {
         lastFpsUpdate = now;
       }
 
-      const delta = Math.min(1.5, (now - lastTime) / (1000 / 60));
       lastTime = now;
 
       const w = 640;
@@ -450,25 +458,23 @@ export default function App() {
 
       const isModelReady = onnxDetectorRef.current.getStatus().isLoaded;
 
-      // 1. Hiển thị luồng Video mượt mà ở 60 FPS
+      // 1. Luồng Video (30-60 FPS mượt mà) tách biệt hoàn toàn với luồng AI (isProcessing)
       if (sourceMode === 'webcam') {
         const video = webcamVideoRef.current;
         if (video && video.readyState >= 2) {
           ctx.drawImage(video, 0, 0, w, h);
-          // Cơ chế Throttling: chỉ suy luận AI ở 10 - 15 FPS, không chặn luồng hiển thị
-          if (isModelReady && !isInferencing && (now - lastInferTime >= INFER_INTERVAL_MS)) {
-            isInferencing = true;
+          if (isModelReady && !isProcessing) {
+            isProcessing = true;
             onnxDetectorRef.current
-              .detectPigs(canvas, confidenceThreshold)
+              .detectPigs(video, confidenceThreshold, w, h)
               .then(boxes => {
                 cachedDetections = boxes;
-                lastInferTime = performance.now();
               })
               .catch(err => {
                 console.error('Lỗi suy luận AI:', err);
               })
               .finally(() => {
-                isInferencing = false;
+                isProcessing = false;
               });
           }
         } else {
@@ -483,20 +489,18 @@ export default function App() {
         const video = uploadedVideoRef.current;
         if (video && video.readyState >= 2 && !video.paused) {
           ctx.drawImage(video, 0, 0, w, h);
-          // Cơ chế Throttling: chỉ suy luận AI ở 10 - 15 FPS
-          if (isModelReady && !isInferencing && (now - lastInferTime >= INFER_INTERVAL_MS)) {
-            isInferencing = true;
+          if (isModelReady && !isProcessing) {
+            isProcessing = true;
             onnxDetectorRef.current
-              .detectPigs(canvas, confidenceThreshold)
+              .detectPigs(video, confidenceThreshold, w, h)
               .then(boxes => {
                 cachedDetections = boxes;
-                lastInferTime = performance.now();
               })
               .catch(err => {
                 console.error('Lỗi suy luận AI:', err);
               })
               .finally(() => {
-                isInferencing = false;
+                isProcessing = false;
               });
           }
         } else {
@@ -879,6 +883,7 @@ export default function App() {
     const now = new Date();
     const endTime = `${now.toLocaleTimeString('vi-VN')} ${now.toLocaleDateString('vi-VN')}`;
     const code = `PNK-${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${(savedRecords.length + 1).toString().padStart(3, '0')}`;
+    const effectiveUserName = resolveUserName(currentUser?.email || '', currentUser?.name);
 
     const record: BatchRecord = {
       id: `batch-${Date.now()}`,
@@ -887,15 +892,15 @@ export default function App() {
       pigType: 'Heo thịt thương phẩm (100-115kg)',
       licensePlate: 'Xe Vận Chuyển',
       deckNumber: 'Sàn 1',
-      driverName: currentUser?.name || 'Tài xế giao nhận',
-      inspectorName: currentUser?.name || 'KCS Kiểm soát AI',
+      driverName: effectiveUserName,
+      inspectorName: effectiveUserName,
       expectedCount: actualCount,
       actualCount,
       forwardCount,
       backwardCount,
       startTime: endTime,
       endTime,
-      notes: `Đã lưu từ ca trực: ${currentUser?.name || 'Hệ thống'} (${currentUser?.email || ''}).`,
+      notes: `Đã lưu từ ca trực: ${effectiveUserName} (${currentUser?.email || ''}).`,
       snapshotUrl: snapshot || undefined,
       directionMode: direction,
       eventsCount: recentEvents.length,
@@ -912,6 +917,7 @@ export default function App() {
     const now = new Date();
     const endTime = `${now.toLocaleTimeString('vi-VN')} ${now.toLocaleDateString('vi-VN')}`;
     const code = `PNK-${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}-${(savedRecords.length + 1).toString().padStart(3, '0')}`;
+    const effectiveUserName = resolveUserName(currentUser?.email || '', currentUser?.name);
 
     const record: BatchRecord = {
       id: `current-${Date.now()}`,
@@ -920,8 +926,8 @@ export default function App() {
       pigType: 'Heo thịt thương phẩm',
       licensePlate: 'Xe Vận Chuyển',
       deckNumber: 'Sàn 1',
-      driverName: currentUser?.name || 'Tài xế giao nhận',
-      inspectorName: currentUser?.name || 'KCS Kiểm soát AI',
+      driverName: effectiveUserName,
+      inspectorName: effectiveUserName,
       expectedCount: actualCount,
       actualCount,
       forwardCount,
@@ -1013,7 +1019,7 @@ export default function App() {
             }`}
           >
             {isAdmin ? <ShieldCheck className="w-4 h-4 text-emerald-600" /> : <User className="w-4 h-4 text-sky-600" />}
-            <span className="max-w-[140px] truncate">{currentUser.name}</span>
+            <span className="max-w-[140px] truncate">{resolveUserName(currentUser.email, currentUser.name)}</span>
             <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded-md bg-white/80 font-bold border border-slate-200/60 shadow-2xs">
               {isAdmin ? 'ADMIN' : 'USER'}
             </span>
@@ -1156,7 +1162,7 @@ export default function App() {
                 {modelStatus.isLoaded ? (
                   <div className="px-3 py-1.5 bg-emerald-950/80 border border-emerald-500/70 rounded-xl text-emerald-300 text-xs font-bold flex items-center gap-1.5 shadow-2xs">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span>Mô hình AI: Sẵn sàng</span>
+                    <span>Đã kết nối mô hình AI (Sẵn sàng)</span>
                   </div>
                 ) : (
                   <div className="px-3 py-1.5 bg-sky-950/80 border border-sky-500/60 rounded-xl text-sky-300 text-xs font-semibold flex items-center gap-1.5">
@@ -1422,7 +1428,7 @@ export default function App() {
             if (isAdmin) {
               setActiveTab('admin');
             } else {
-              alert('Chỉ tài khoản Quản Trị Viên (Admin) mới có quyền truy cập vào bảng Quản trị Admin. Vui lòng đăng xuất và đăng nhập tài khoản Admin.');
+              setStatusMsg('Chỉ tài khoản Quản Trị Viên (Admin) mới có quyền truy cập bảng Quản trị Admin.');
             }
           }}
           className={`cursor-pointer transition-all flex flex-col items-center justify-center px-4 sm:px-5 py-2 rounded-2xl min-w-[80px] sm:min-w-[96px] relative ${

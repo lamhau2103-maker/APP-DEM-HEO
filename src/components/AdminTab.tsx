@@ -37,14 +37,12 @@ export const AdminTab: React.FC<AdminTabProps> = ({
       showToast('error', 'Vui lòng nhập email người dùng cần cấp quyền.');
       return;
     }
-    if (!nameTrim) {
-      showToast('error', 'Vui lòng nhập họ tên người dùng.');
-      return;
-    }
 
-    const success = onAddApprovedUser(emailTrim, nameTrim);
+    const finalName = nameTrim || (emailTrim.includes('@') ? emailTrim.split('@')[0] : '') || 'Nhân viên';
+
+    const success = onAddApprovedUser(emailTrim, finalName);
     if (success) {
-      showToast('success', `Đã cấp quyền thành công cho "${emailTrim}"! Người dùng có thể đăng nhập vào ứng dụng ngay.`);
+      showToast('success', `Đã cấp quyền thành công cho "${emailTrim}" (${finalName})! Người dùng có thể đăng nhập vào ứng dụng ngay.`);
       setNewEmail('');
       setNewName('');
     } else {

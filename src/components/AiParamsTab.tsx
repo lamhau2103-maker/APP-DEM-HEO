@@ -45,16 +45,16 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
     setSuccessMsg(null);
 
     try {
-      const success = await onnxDetector.autoLoadModel();
+      const success = await onnxDetector.autoLoadModel('/weights1.onnx');
       if (success) {
-        onModelLoaded('weights1.onnx (GitHub Release)');
-        setSuccessMsg('Đã kết nối và nạp thành công weights1.onnx từ GitHub Release v1.0.0!');
+        onModelLoaded('weights1.onnx');
+        setSuccessMsg('Đã kết nối mô hình AI (Sẵn sàng) từ "/weights1.onnx"!');
       } else {
-        setErrorMsg('Chưa thể kết nối tới GitHub Release. Vui lòng kiểm tra lại kết nối mạng hoặc thử lại.');
+        setErrorMsg('Chưa thể nạp tệp /weights1.onnx. Vui lòng thử lại.');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Lỗi kết nối';
-      setErrorMsg(`Không thể nạp tệp từ GitHub Release: ${msg}`);
+      setErrorMsg(`Không thể nạp tệp /weights1.onnx: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -122,7 +122,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
           <div className="flex-1">
             <div className="flex items-center justify-between">
               <p className="font-bold text-sm">
-                Trạng thái: {isModelLoaded ? 'Mô hình AI weights1.onnx đang hoạt động' : 'Đang kết nối mô hình AI từ GitHub Release...'}
+                Trạng thái: {isModelLoaded ? 'Đã kết nối mô hình AI (Sẵn sàng)' : 'Đang kết nối mô hình AI...'}
               </p>
               <span className="font-mono text-xs font-bold text-sky-700 bg-white/90 px-2.5 py-0.5 rounded-xl border border-sky-200 shadow-2xs">
                 {modelName}
@@ -130,8 +130,8 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
             </div>
             <p className="text-xs mt-1 text-slate-700">
               {isModelLoaded
-                ? 'Đã kết nối thành công weights1.onnx từ GitHub Release (v1.0.0). Hệ thống chỉ nhận diện hình dạng heo, tự động bỏ qua người và vật.'
-                : 'Ứng dụng đang tự động kết nối và tải ngầm weights1.onnx từ GitHub Release v1.0.0.'}
+                ? 'Đã kết nối thành công "/weights1.onnx" (đã lưu cache IndexedDB tốc độ cao). Hệ thống chỉ nhận diện heo, tự động bỏ qua người và vật.'
+                : 'Ứng dụng đang tự động nạp ngầm "/weights1.onnx" và lưu cache IndexedDB.'}
             </p>
           </div>
         </div>
@@ -141,21 +141,21 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
           <div className="flex items-center justify-between border-b border-slate-100 pb-2">
             <h3 className="font-bold text-sm text-slate-800 flex items-center gap-2">
               <FileCode className="w-4 h-4 text-sky-600" />
-              Mô Hình AI YOLOv8 weights1.onnx (GitHub Releases)
+              Mô Hình AI YOLOv8 /weights1.onnx (IndexedDB Cache)
             </h3>
-            <span className="text-[11px] font-mono text-emerald-600 font-bold">Auto-Sync v1.0.0</span>
+            <span className="text-[11px] font-mono text-emerald-600 font-bold">WASM SIMD Ready</span>
           </div>
 
           <div className="border border-sky-200 rounded-3xl p-6 text-center bg-sky-50/40 backdrop-blur-xs">
             <FileCode className="w-10 h-10 mx-auto text-sky-600 mb-2 stroke-1" />
             <p className="font-bold text-slate-800 text-sm">
-              Mô hình được tự động nạp ngầm từ GitHub Release chính thức:
+              Mô hình được tự động nạp trực tiếp từ đường dẫn tĩnh nội bộ:
             </p>
             <p className="text-xs text-sky-700 font-mono mt-1 max-w-lg mx-auto bg-white/80 py-1.5 px-3 rounded-xl border border-sky-100 truncate">
-              https://github.com/lamhau2103-maker/APP-DEM-HEO/releases/download/v1.0.0/weights1.onnx
+              /weights1.onnx (public/weights1.onnx)
             </p>
             <p className="text-xs text-slate-500 mt-2">
-              Tối ưu tăng tốc phần cứng WebGL và tự động nhận diện heo qua camera ở 10 - 15 FPS siêu mượt.
+              Lưu cache ArrayBuffer trong IndexedDB ngay lần đầu tải giúp các lần mở sau nạp tức thì.
             </p>
 
             <div className="flex items-center justify-center gap-3 mt-4">
@@ -166,7 +166,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
                 className="px-5 py-3 bg-gradient-to-b from-sky-500 via-sky-600 to-sky-700 hover:from-sky-400 hover:to-sky-600 text-white font-black text-xs rounded-2xl flex items-center gap-2 shadow-[0_4px_0_0_#0284c7,0_6px_14px_rgba(2,132,199,0.25)] active:shadow-none active:translate-y-0.5 border-t border-sky-300/40 transition-all cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                {loading ? 'Đang đồng bộ...' : 'Đồng Bộ Lại Từ GitHub Release'}
+                {loading ? 'Đang nạp...' : 'Nạp Lại Mô Hình /weights1.onnx'}
               </button>
             </div>
           </div>
@@ -207,7 +207,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
               </div>
               <input
                 type="range"
-                min="0.30"
+                min="0.20"
                 max="0.90"
                 step="0.05"
                 value={confidenceThreshold}
@@ -215,7 +215,7 @@ export const AiParamsTab: React.FC<AiParamsTabProps> = ({
                 className="w-full accent-sky-600 cursor-pointer"
               />
               <p className="text-[11px] text-slate-500">
-                Độ nhạy AI: 65% - 75% là tối ưu. Ngưỡng cao lọc sạch bóng mờ và phản xạ sàn chuồng.
+                Mặc định 25% (0.25) kết hợp NMS (IoU = 0.45) giúp nhận diện nhạy và mỗi con heo chỉ có duy nhất 1 khung bao quanh.
               </p>
             </div>
 
