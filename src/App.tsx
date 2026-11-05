@@ -242,7 +242,7 @@ export default function App() {
   const [direction, setDirection] = useState<CountDirection>('IN_TO_OUT');
   const [countMode, setCountMode] = useState<'net' | 'gross'>('net');
   
-  // Nâng ngưỡng độ tin cậy (Confidence Threshold) mặc định lên 0.65 để lọc bỏ triệt để nhận diện nhầm
+  // Đã nâng ngưỡng độ tin cậy mặc định lên 0.65 để lọc bỏ nhận diện nhầm
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.65);
   
   const [soundEnabled, setSoundEnabled] = useState(true);
